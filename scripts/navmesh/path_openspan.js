@@ -25,6 +25,8 @@ export class OpenSpan {
 
         //区域距离场优化
         this.newDist = 0;
+        //是否在使用
+        this.use=true;
     }
 
     /**
@@ -34,6 +36,7 @@ export class OpenSpan {
      * @returns {boolean}
      */
     canTraverseTo(other, maxStep = MAX_WALK_HEIGHT, agentHeight = AGENT_HEIGHT) {
+        if(!other.use)return false;
         if (Math.abs(other.floor - this.floor) > maxStep) {
             return false;
         }

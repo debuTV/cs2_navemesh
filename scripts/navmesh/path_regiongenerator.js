@@ -39,32 +39,37 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    span.neighbors = [null, null, null, null];
+                    if(span.use)
+                    {
+                        span.neighbors = [null, null, null, null];
 
-                    for (let d = 0; d < 4; d++) {
-                        const nx = x + dirs[d].dx;
-                        const ny = y + dirs[d].dy;
-                        if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+                        for (let d = 0; d < 4; d++) {
+                            const nx = x + dirs[d].dx;
+                            const ny = y + dirs[d].dy;
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
 
-                        let best = null;
-                        let bestDiff = Infinity;
-                        /**@type {OpenSpan|null} */
-                        let nspan = this.hf[nx][ny];
+                            let best = null;
+                            let bestDiff = Infinity;
+                            /**@type {OpenSpan|null} */
+                            let nspan = this.hf[nx][ny];
 
-                        while (nspan) {
-                            if (span.canTraverseTo(nspan)) {
-                                const diff = Math.abs(span.floor - nspan.floor);
-                                if (diff < bestDiff) {
-                                    best = nspan;
-                                    bestDiff = diff;
+                            while (nspan) {
+                                if(nspan.use)
+                                {
+                                    if (span.canTraverseTo(nspan)) {
+                                        const diff = Math.abs(span.floor - nspan.floor);
+                                        if (diff < bestDiff) {
+                                            best = nspan;
+                                            bestDiff = diff;
+                                        }
+                                    }
                                 }
+                                nspan = nspan.next;
                             }
-                            nspan = nspan.next;
+
+                            span.neighbors[d] = best;
                         }
-
-                        span.neighbors[d] = best;
                     }
-
                     span = span.next;
                 }
             }
@@ -101,8 +106,11 @@ export class RegionGenerator {
             for (let y = 0; y < this.gridY; y++) {
                 let span = this.hf[x][y];
                 while (span) {
-                    // 如果任意一个邻居缺失，说明是边界
-                    span.distance = this.isBorderSpan(span) ? 0 : Infinity;
+                    if(span.use)
+                    {
+                        // 如果任意一个邻居缺失，说明是边界
+                        span.distance = this.isBorderSpan(span) ? 0 : Infinity;
+                    }
                     span = span.next;
                 }
             }
@@ -114,19 +122,22 @@ export class RegionGenerator {
             for (let x = 0; x < this.gridX; x++) {
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.distance > 0) {
-                        // 西
-                        let n = this.getNeighbor(span, 0);
-                        if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                        // 西南
-                        let nd = this.getDiagonalNeighbor(span, 0, 3);
-                        if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
-                        // 南
-                        n = this.getNeighbor(span, 3);
-                        if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                        // 东南
-                        nd = this.getDiagonalNeighbor(span, 3, 2);
-                        if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                    if(span.use)
+                    {
+                        if (span.distance > 0) {
+                            // 西
+                            let n = this.getNeighbor(span, 0);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 西南
+                            let nd = this.getDiagonalNeighbor(span, 0, 3);
+                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            // 南
+                            n = this.getNeighbor(span, 3);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 东南
+                            nd = this.getDiagonalNeighbor(span, 3, 2);
+                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                        }
                     }
                     span = span.next;
                 }
@@ -139,19 +150,22 @@ export class RegionGenerator {
             for (let x = this.gridX - 1; x >= 0; x--) {
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.distance > 0) {
-                        // 东
-                        let n = this.getNeighbor(span, 2);
-                        if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                        // 东北
-                        let nd = this.getDiagonalNeighbor(span, 2, 1);
-                        if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
-                        // 北
-                        n = this.getNeighbor(span, 1);
-                        if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                        // 西北
-                        let nd2 = this.getDiagonalNeighbor(span, 1, 0);
-                        if (nd2) span.distance = Math.min(span.distance, nd2.distance + 3);
+                    if(span.use)
+                    {
+                        if (span.distance > 0) {
+                            // 东
+                            let n = this.getNeighbor(span, 2);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 东北
+                            let nd = this.getDiagonalNeighbor(span, 2, 1);
+                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            // 北
+                            n = this.getNeighbor(span, 1);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 西北
+                            let nd2 = this.getDiagonalNeighbor(span, 1, 0);
+                            if (nd2) span.distance = Math.min(span.distance, nd2.distance + 3);
+                        }
                     }
                     span = span.next;
                 }
@@ -168,17 +182,20 @@ export class RegionGenerator {
             for (let y = 0; y < this.gridY; y++) {
                 let span = this.hf[x][y];
                 while (span) {
-                    //只有远离边界的体素才参与模糊
-                    if (span.distance <= threshold) span.newDist = span.distance;
-                    else {
-                        let d = span.distance;
-                        //计算平均距离
-                        for (let i = 0; i < 4; i++) {
-                            const n = span.neighbors[i];
-                            if (n) d += n.distance;
-                            else d += span.distance;
+                    if(span.use)
+                    {
+                        //只有远离边界的体素才参与模糊
+                        if (span.distance <= threshold) span.newDist = span.distance;
+                        else {
+                            let d = span.distance;
+                            //计算平均距离
+                            for (let i = 0; i < 4; i++) {
+                                const n = span.neighbors[i];
+                                if (n) d += n.distance;
+                                else d += span.distance;
+                            }
+                            span.newDist = Math.floor((d + 2) / 5);
                         }
-                        span.newDist = Math.floor((d + 2) / 5);
                     }
                     span = span.next;
                 }
@@ -188,8 +205,11 @@ export class RegionGenerator {
             for (let y = 0; y < this.gridY; y++) {
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.newDist !== undefined) {
-                        span.distance = span.newDist;
+                    if(span.use)
+                    {
+                        if (span.newDist !== undefined) {
+                            span.distance = span.newDist;
+                        }
                     }
                     span = span.next;
                 }
@@ -226,9 +246,12 @@ export class RegionGenerator {
             for (let y = 0; y < this.gridY; y++) {
                 let span = this.hf[x][y];
                 while (span) {
-                    span.regionId = 0;
-                    if (span.distance >= 0) {
-                        spans.push(span);
+                    if(span.use)
+                    {
+                        span.regionId = 0;
+                        if (span.distance >= 0) {
+                            spans.push(span);
+                        }
                     }
                     span = span.next;
                 }
@@ -274,22 +297,25 @@ export class RegionGenerator {
                 for (let y = 0; y < this.gridY; y++) {
                     let span = this.hf[x][y];
                     while (span) {
-                        //如果当前没有区域
-                        if (span.regionId === 0) {
-                            let bestRegion = 0;
-                            let bestDist = -1;
-                            for (let d = 0; d < 4; d++) {
-                                const n = span.neighbors[d];
-                                if (n && n.regionId > 0) {
-                                    if (n.distance > bestDist) {
-                                        bestDist = n.distance;
-                                        bestRegion = n.regionId;
+                        if(span.use)
+                        {
+                            //如果当前没有区域
+                            if (span.regionId === 0) {
+                                let bestRegion = 0;
+                                let bestDist = -1;
+                                for (let d = 0; d < 4; d++) {
+                                    const n = span.neighbors[d];
+                                    if (n && n.regionId > 0) {
+                                        if (n.distance > bestDist) {
+                                            bestDist = n.distance;
+                                            bestRegion = n.regionId;
+                                        }
                                     }
                                 }
-                            }
-                            if (bestRegion > 0) {
-                                span.regionId = bestRegion;
-                                changed = true;
+                                if (bestRegion > 0) {
+                                    span.regionId = bestRegion;
+                                    changed = true;
+                                }
                             }
                         }
                         span = span.next;
@@ -310,9 +336,12 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.regionId > 0) {
-                        if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                        regionSpans.get(span.regionId)?.push(span);
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
                     }
                     span = span.next;
                 }
@@ -358,9 +387,12 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.regionId > 0) {
-                        if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                        regionSpans.get(span.regionId)?.push(span);
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
                     }
                     span = span.next;
                 }
@@ -384,9 +416,12 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.regionId > 0) {
-                        if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                        regionSpans.get(span.regionId)?.push(span);
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
                     }
                     span = span.next;
                 }
@@ -458,21 +493,24 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.regionId > 0) {
-                        const c = randomColor(span.regionId);
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            const c = randomColor(span.regionId);
 
-                        const center = {
-                            x: origin.x + (x + 0.5) * MESH_CELL_SIZE_XY,
-                            y: origin.y + (y + 0.5) * MESH_CELL_SIZE_XY,
-                            z: origin.z + span.floor * MESH_CELL_SIZE_Z
-                        };
+                            const center = {
+                                x: origin.x + (x + 0.5) * MESH_CELL_SIZE_XY,
+                                y: origin.y + (y + 0.5) * MESH_CELL_SIZE_XY,
+                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                            };
 
-                        Instance.DebugSphere({
-                            center,
-                            radius: MESH_CELL_SIZE_XY * 0.3,
-                            color: c,
-                            duration
-                        });
+                            Instance.DebugSphere({
+                                center,
+                                radius: MESH_CELL_SIZE_XY * 0.3,
+                                color: c,
+                                duration
+                            });
+                        }
                     }
                     span = span.next;
                 }
@@ -490,7 +528,10 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    maxDist = Math.max(maxDist, span.distance);
+                    if(span.use)
+                    {
+                        maxDist = Math.max(maxDist, span.distance);
+                    }
                     span = span.next;
                 }
             }
@@ -501,24 +542,27 @@ export class RegionGenerator {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.distance < Infinity) {
-                        const t = span.distance / maxDist;
-                        const c = {
-                            r: Math.floor(255 * t),
-                            g: Math.floor(255 * (1 - t)),
-                            b: 0
-                        };
+                    if(span.use)
+                    {
+                        if (span.distance < Infinity) {
+                            const t = span.distance / maxDist;
+                            const c = {
+                                r: Math.floor(255 * t),
+                                g: Math.floor(255 * (1 - t)),
+                                b: 0
+                            };
 
-                        Instance.DebugSphere({
-                            center: {
-                                x: origin.x + x * MESH_CELL_SIZE_XY,
-                                y: origin.y + y * MESH_CELL_SIZE_XY,
-                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
-                            },
-                            radius: MESH_CELL_SIZE_XY * 0.25,
-                            color: c,
-                            duration
-                        });
+                            Instance.DebugSphere({
+                                center: {
+                                    x: origin.x + x * MESH_CELL_SIZE_XY,
+                                    y: origin.y + y * MESH_CELL_SIZE_XY,
+                                    z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                                },
+                                radius: MESH_CELL_SIZE_XY * 0.25,
+                                color: c,
+                                duration
+                            });
+                        }
                     }
                     span = span.next;
                 }

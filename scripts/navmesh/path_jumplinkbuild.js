@@ -37,6 +37,7 @@ export class JumpLinkBuilder
                         p1: v1,
                         p2: v2
                     });
+                    //Instance.DebugLine({start:v1,end:v2,duration:60,color:{r:255,g:0,b:0}});
                 }
             }
         }
@@ -129,7 +130,7 @@ export class JumpLinkBuilder
         };
 
         return {
-            distSq: posDistance3Dsqr(ptA, ptB),
+            distSq: posDistance2Dsqr(ptA, ptB),
             ptA,
             ptB
         };
@@ -164,16 +165,17 @@ export class JumpLinkBuilder
                 if (!closestResult) continue;
 
                 const { distSq, ptA, ptB } = closestResult;
-                //同一点跳过
-                if (distSq < 1) continue;
+                // 5. 距离判断
+                if (distSq > this.jumpDist * this.jumpDist) continue;
+
                 //如果a和b在同一个可行走区域，并且没有跳跃的捷径，就跳过
                 if(this.islandIds[edgeA.polyIndex] === this.islandIds[edgeB.polyIndex]&&Math.abs(ptA.z-ptB.z)<=this.walkHeight)continue;
                 // 4. 高度判断 (Z轴)
                 const heightDiff = Math.abs(ptA.z - ptB.z);
                 if (heightDiff > this.jumpHeight) continue;
-
-                // 5. 距离判断
-                if (distSq > this.jumpDist * this.jumpDist) continue;
+                //同一点跳过
+                if (heightDiff <1&&distSq < 1) continue;
+                //Instance.DebugLine({start:ptA,end:ptB,duration:60,color:{r:255,g:0,b:0}});
                 // 6. 记录候选
                 this.updateBestCandidate(bestJumpPerPoly, edgeA.polyIndex, edgeB.polyIndex, distSq, ptA, ptB);
             }
@@ -290,9 +292,16 @@ export class JumpLinkBuilder
                 color: { r: 0, g: (link.type==1?255:0), b: 255 },
                 duration
             });
-            Instance.DebugSphere({ center: link.PosA, radius: 4, color: { r: 0, g: 255, b: 0 }, duration });
+            //Instance.DebugSphere({ center: link.PosA, radius: 4, color: { r: 0, g: 255, b: 0 }, duration });
             //Instance.DebugSphere({ center: link.endPos, radius: 4, color: { r: 255, g: 0, b: 0 }, duration });
-            const poly = this.mesh.polys[link.PolyB];
+            let poly = this.mesh.polys[link.PolyB];
+            for (let i = 0; i < poly.length; i++) {
+                const start = this.mesh.verts[poly[i]];
+                const end = this.mesh.verts[poly[(i + 1) % poly.length]];
+                Instance.DebugLine({start,end,color:{ r: 255, g: 0, b: 255 },duration});
+                //Instance.DebugSphere({center:start,radius:6,color,duration});
+            }
+            poly = this.mesh.polys[link.PolyA];
             for (let i = 0; i < poly.length; i++) {
                 const start = this.mesh.verts[poly[i]];
                 const end = this.mesh.verts[poly[(i + 1) % poly.length]];

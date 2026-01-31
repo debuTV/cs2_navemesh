@@ -260,22 +260,25 @@ export class ContourBuilder {
                 /**@type {OpenSpan|null} */
                 let span = this.hf[x][y];
                 while (span) {
-                    if (span.regionId > 0) {
-                        for (let dir = 0; dir < 4; dir++) {
-                            if (this.isBoundaryEdge(span, dir)) {
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            for (let dir = 0; dir < 4; dir++) {
+                                if (this.isBoundaryEdge(span, dir)) {
 
-                                const key = this.edgeKey(x, y, span, dir);
-                                if (visited.has(key)) continue;
+                                    const key = this.edgeKey(x, y, span, dir);
+                                    if (visited.has(key)) continue;
 
-                                let contour = this.traceContour(x, y, span, dir, visited);
-                                if (contour && contour.length >= 3) {
-                                    //外轮廓：逆时针（CCW）
-                                    //洞轮廓：顺时针（CW）
-                                    const l = contour.length;
-                                    contour = this.simplifyContour(contour);
+                                    let contour = this.traceContour(x, y, span, dir, visited);
                                     if (contour && contour.length >= 3) {
-                                        this.contours.push(contour);
-                                        //Instance.Msg(`{${l}}=>{${contour.length}}`);
+                                        //外轮廓：逆时针（CCW）
+                                        //洞轮廓：顺时针（CW）
+                                        const l = contour.length;
+                                        contour = this.simplifyContour(contour);
+                                        if (contour && contour.length >= 3) {
+                                            this.contours.push(contour);
+                                            //Instance.Msg(`{${l}}=>{${contour.length}}`);
+                                        }
                                     }
                                 }
                             }
@@ -492,8 +495,8 @@ export class ContourBuilder {
                 //Instance.Msg(nid);
                 if (h !== null) {
                     verts.push({
-                        x: origin.x + c.x * MESH_CELL_SIZE_XY,
-                        y: origin.y + c.y * MESH_CELL_SIZE_XY,
+                        x: origin.x + c.x * MESH_CELL_SIZE_XY-MESH_CELL_SIZE_XY/2,
+                        y: origin.y + c.y * MESH_CELL_SIZE_XY-MESH_CELL_SIZE_XY/2,
                         z: origin.z + h * MESH_CELL_SIZE_Z,
                         regionId: span.regionId,      //当前span的region
                         neighborRegionId: nid   //对面span的region（或 0）
@@ -552,10 +555,13 @@ export class ContourBuilder {
             /**@type {OpenSpan|null} */
             let s = this.hf[p1.x][p1.y];
             while (s) {
-                if (span.canTraverseTo(s)) {
-                    if (maxFloor < s.floor) {
-                        maxFloor = s.floor;
-                        maxspan = s;
+                if(s.use)
+                {
+                    if (span.canTraverseTo(s)) {
+                        if (maxFloor < s.floor) {
+                            maxFloor = s.floor;
+                            maxspan = s;
+                        }
                     }
                 }
                 s = s.next;
@@ -566,10 +572,13 @@ export class ContourBuilder {
             /**@type {OpenSpan|null} */
             let s = this.hf[p2.x][p2.y];
             while (s) {
-                if (span.canTraverseTo(s)) {
-                    if (maxFloor < s.floor) {
-                        maxFloor = s.floor;
-                        maxspan = s;
+                if(s.use)
+                {
+                    if (span.canTraverseTo(s)) {
+                        if (maxFloor < s.floor) {
+                            maxFloor = s.floor;
+                            maxspan = s;
+                        }
                     }
                 }
                 s = s.next;
@@ -580,10 +589,13 @@ export class ContourBuilder {
             /**@type {OpenSpan|null} */
             let s = this.hf[p3.x][p3.y];
             while (s) {
-                if (span.canTraverseTo(s)) {
-                    if (maxFloor < s.floor) {
-                        maxFloor = s.floor;
-                        maxspan = s;
+                if(s.use)
+                {
+                    if (span.canTraverseTo(s)) {
+                        if (maxFloor < s.floor) {
+                            maxFloor = s.floor;
+                            maxspan = s;
+                        }
                     }
                 }
                 s = s.next;

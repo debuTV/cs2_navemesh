@@ -1,5 +1,5 @@
 import { Instance } from "cs_script/point_script";
-import { area, distPtSegSq, getRandomColor, isConvex, POLY_MAX_VERTS_PER_POLY, pointInTri, posDistance2Dsqr, posZfly, posDistance3Dsqr, isCollinear } from "./path_const";
+import { area, distPtSegSq, getRandomColor, isConvex, POLY_MAX_VERTS_PER_POLY, pointInTri, posDistance2Dsqr, posZfly, posDistance3Dsqr, isCollinear, POLY_MERGE_LONGEST_EDGE_FIRST, POLY_BIG_TRI } from "./path_const";
 
 export class PolyMeshBuilder {
 
@@ -23,13 +23,14 @@ export class PolyMeshBuilder {
     init() {
         const unmerged=[];
         for (const contour of this.contours) {
-            const pl=this.mergeTriangles(this.triangulate(contour));
+            const pl=this.mergeTriangles(this.triangulate(contour),POLY_MERGE_LONGEST_EDGE_FIRST);
             for (const p of pl) {
                 unmerged.push(p);
             }
         }
-        const merged = this.mergeTriangles(unmerged);
-        for (const p of merged) {
+        //const merged = this.mergeTriangles(unmerged,false);
+        //不能区域间merge，detail需要使用区域id
+        for (const p of unmerged) {
             this.addPolygon(p);
         }
         this.buildAdjacency();
@@ -53,41 +54,100 @@ export class PolyMeshBuilder {
         const result = [];
 
         let guard = 0;
-        while (verts.length > 3 && guard++ < 5000) {
-            let earFound = false;
-            for (let i = 0; i < verts.length; i++) {
-                const prev = verts[(i - 1 + verts.length) % verts.length];
-                const cur = verts[i];
-                const next = verts[(i + 1) % verts.length];
-                //cur对应的角度是否<180度
-                if (!isConvex(prev, cur, next)) continue;
-                //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
-                let contains = false;
-                for (let j = 0; j < verts.length; j++) {
-                    if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                    if (pointInTri(verts[j], prev, cur, next)) {
-                        contains = true;
-                        break;
+        if(POLY_BIG_TRI)
+        {
+            while (verts.length > 3 && guard++ < 5000) {
+                let bestEar=null;
+                let minPerimeter=Infinity;
+                let bestIndex=-1;
+
+                for (let i = 0; i < verts.length; i++) {
+                    const prev = verts[(i - 1 + verts.length) % verts.length];
+                    const cur = verts[i];
+                    const next = verts[(i + 1) % verts.length];
+                    //cur对应的角度是否<180度
+                    if (!isConvex(prev, cur, next)) continue;
+                    //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
+                    let contains = false;
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (pointInTri(verts[j], prev, cur, next)) {
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) continue;
+                    // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
+                        {
+                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) continue;
+                    const perimeter = 
+                    Math.sqrt(posDistance2Dsqr(prev, cur)) +
+                    Math.sqrt(posDistance2Dsqr(cur, next)) +
+                    Math.sqrt(posDistance2Dsqr(next, prev));
+                
+                    // 找到周长最短的耳朵
+                    if (perimeter < minPerimeter) {
+                        minPerimeter = perimeter;
+                        bestEar = {prev, cur, next};
+                        bestIndex = i;
                     }
                 }
-                if (contains) continue;
-                // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
-                for (let j = 0; j < verts.length; j++) {
-                    if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                    if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
-                    {
-                        if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
-                        contains = true;
-                        break;
-                    }
+                // 如果找到了最佳耳朵，割掉它
+                if (bestEar && bestIndex !== -1) {
+                    result.push([bestEar.prev, bestEar.cur, bestEar.next]);
+                    verts.splice(bestIndex, 1);
+                } else {
+                    // 找不到耳朵，退出循环
+                    break;
                 }
-                if (contains) continue;
-                result.push([prev, cur, next]);
-                verts.splice(i, 1);
-                earFound = true;
-                break;
             }
-            if (!earFound) break;
+        }
+        else
+        {
+            while (verts.length > 3 && guard++ < 5000) {
+                let earFound = false;
+                for (let i = 0; i < verts.length; i++) {
+                    const prev = verts[(i - 1 + verts.length) % verts.length];
+                    const cur = verts[i];
+                    const next = verts[(i + 1) % verts.length];
+                    //cur对应的角度是否<180度
+                    if (!isConvex(prev, cur, next)) continue;
+                    //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
+                    let contains = false;
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (pointInTri(verts[j], prev, cur, next)) {
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) continue;
+                    // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
+                        {
+                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) continue;
+                    result.push([prev, cur, next]);
+                    verts.splice(i, 1);
+                    earFound = true;
+                    break;
+                }
+                if (!earFound) break;
+            }
         }
 
         if (verts.length == 3) {
@@ -149,21 +209,52 @@ export class PolyMeshBuilder {
 
     /**
      * @param {{x:number,y:number,z:number,regionId:number}[][]} tris
+     * @param {boolean}config//是否合并最长边
      */
-    mergeTriangles(tris) {
+    mergeTriangles(tris,config) {
         const polys = tris.map(t => t.slice());
         let merged=true;
-        while (merged) {
-            merged = false;
-            for (let i = 0; i < polys.length; i++) {
-                for (let j = i + 1; j < polys.length; j++) {
-                    const info = this.getMergeInfo(polys[i], polys[j]);
-                    
-                    if (info) {
-                        polys[i] = info;
-                        polys.splice(j, 1);
-                        merged = true;
-                        break;
+        if(config)
+        {
+            while (merged) {
+                merged = false;
+                let bdist=-Infinity;
+                let bi=-1;
+                let bj=-1;
+                let binfo=null;
+                for (let i = 0; i < polys.length; i++) {
+                    for (let j = i + 1; j < polys.length; j++) {
+                        const info = this.getMergeInfo(polys[i], polys[j]);
+                        if (info&&info.dist>bdist) {
+                            bdist=info.dist;
+                            bi=i;
+                            bj=j;
+                            binfo=info.info;
+                        }
+                    }
+                }
+                if(binfo)
+                {
+                    polys[bi] = binfo;
+                    polys.splice(bj, 1);
+                    merged = true;
+                }
+            }
+        }
+        else
+        {
+            while (merged) {
+                merged = false;
+                outer:
+                for (let i = 0; i < polys.length; i++) {
+                    for (let j = i + 1; j < polys.length; j++) {
+                        const info = this.getMergeInfo(polys[i], polys[j]);
+                        if (info) {
+                            polys[i] = info.info;
+                            polys.splice(j, 1);
+                            merged = true;
+                            break outer;
+                        }
                     }
                 }
             }
@@ -213,11 +304,11 @@ export class PolyMeshBuilder {
         if (!this.isPolyConvex(merged)) return null;
 
         // 计算公共边长度 (用于优先权排序)
-        //const v1 = a[ai];
-        //const v2 = a[(ai + 1) % nA];
-        //const distSq = (v1.x - v2.x) ** 2 + (v1.y - v2.y) ** 2; // 只计算XY平面距离
+        const v1 = a[ai];
+        const v2 = a[(ai + 1) % nA];
+        const distSq = (v1.x - v2.x) ** 2 + (v1.y - v2.y) ** 2; // 只计算XY平面距离
 
-        return merged;
+        return {info:merged,dist:distSq};
     }
     /**
      * [新增] 移除多边形中三点共线的冗余顶点
