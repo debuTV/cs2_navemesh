@@ -7,7 +7,17 @@ Instance.ServerCommand("mp_freezetime 1");
 Instance.ServerCommand("mp_ignore_round_win_conditions 1");
 Instance.ServerCommand("weapon_accuracy_nospread 1");
 let pathfinder = new NavMesh();
-
+Instance.OnScriptReload({
+    before: () => {
+    },
+    after: () => {
+        //let start = new Date();
+        //Instance.Msg("导航初始化中");
+        //pathfinder.init();
+        //let end = new Date();
+        //Instance.Msg(`导航初始化完成,耗时${end.getTime()-start.getTime()}ms`);
+    }
+});
 let path_ini=false;
 function init()
 {
@@ -21,10 +31,24 @@ function init()
 }
 let start={x:-896,y:-783,z:117};
 let end={x:351,y:2352,z:-110};
-let ck=false;
+let pd=false;
 Instance.SetThink(() => {
-    if(ck==true)
+    if(pd==true)
     {
+        //pathfinder.randomTest(10);
+        //var players=Instance.FindEntitiesByClass("player");
+        //players.forEach((e)=>{
+        //    if(e&&e instanceof CSPlayerPawn)
+        //    {
+        //        var p=e.GetPlayerController()?.GetPlayerPawn();
+        //        if(p)
+        //        {
+        //            const pos=p.GetAbsOrigin();
+        //            end={x:pos.x,y:pos.y,z:pos.z};
+        //            return;
+        //        }
+        //    }
+        //})
         for(let i=0;i<1;i++)pathfinder.findPath(start,end);
     }
     Instance.SetNextThink(Instance.GetGameTime()+1/2);
@@ -32,6 +56,8 @@ Instance.SetThink(() => {
 Instance.SetNextThink(Instance.GetGameTime()+1/2);
 Instance.OnBulletImpact((event)=>{
     end=event.position;
+    //pathfinder.findPath(start,end);
+    //pathfinder.findPath(start,end);
 });
 Instance.OnPlayerChat((event) => {
     const text = (event.text || "").trim().toLowerCase().split(' ')[0];
@@ -40,7 +66,10 @@ Instance.OnPlayerChat((event) => {
     {
         init();
         pathfinder.debug(60);
-        //ck=true;
+        //pathfinder.testinit();
+        pd=true;
+        //pathfinder.testinit();
+        //pathfinder.randomTest(num);
     }
     if (text === "c" || text === "!c")
     {
@@ -49,6 +78,7 @@ Instance.OnPlayerChat((event) => {
         {
             const pos=p.GetAbsOrigin();
             start={x:pos.x,y:pos.y,z:pos.z};
+            //Instance.Msg(`${Math.floor(pos.x)}  ${Math.floor(pos.y)}  ${Math.floor(pos.z)}`);
         }
     }
     if (text === "v" || text === "!v")
@@ -58,6 +88,9 @@ Instance.OnPlayerChat((event) => {
         {
             const pos=p.GetAbsOrigin();
             end={x:pos.x,y:pos.y,z:pos.z};
+            //const path = pathfinder.findPath(start,end);
+            //Instance.Msg(`${Math.floor(end.x)}  ${Math.floor(end.y)}  ${Math.floor(end.z)}`);
+            //pathfinder.debugDrawPath(path,30);
         }
     }
 });

@@ -10,42 +10,44 @@ export const MESH_WORLD_SIZE_Z = 480;                             // 世界高�
 export const MESH_OPTIMIZATION_1 = true;                          // 优化1：是否修剪掉info_target{name:navmesh}不能去的体素
 export const MESH_OPTIMIZATION_2 = true;                          // 优化2: 忽略边界旁边1个体素，防止出现爬墙,这个选项需要CELL_SIZE足够小，(当出现耳割法错误时推荐开启)
 export const MESH_OPTIMIZATION_3 = false;                         // 优化3: 忽略三个方向都是边界的体素
-export const MESH_ERODE_RADIUS = 1;                               // 腐蚀半径，如果一个区域应该不能被走到，但优化1未去除，可以增加此值
+export const MESH_ERODE_RADIUS = 0;                               // 腐蚀半径，如果一个区域应该不能被走到，但优化1未去除，可以增加此值
 export const MESH_HOLE_FILLING = 0;                               // 有些时候莫名其妙有空洞，这时候可以自动填洞,数值越高，越有可能填中
 //区域生成参数
 export const REGION_MERGE_AREA = 1024;                            // 合并区域阈值（体素单位）
 export const REGION_MIN_AREA = 16;                                // 最小区域面积（体素单位）
-//export const REGION_OPTIMIZATION_1 = true;                      // 优化1: 将区域与区域之间平滑处理
 //轮廓生成参数
-export const CONT_MAX_ERROR = MESH_CELL_SIZE_XY * 1.6;            // 原始点到简化后边的最大允许偏离距离（长度）
-//export const CONT_MAX_Length = MESH_CELL_SIZE_XY * 10;          // 最大简化边长度（长度）
+export const CONT_MAX_ERROR = MESH_CELL_SIZE_XY * 1.2;            // 原始点到简化后边的最大允许偏离距离（长度）
 // 多边形网格配置
+export const POLY_BIG_TRI = true;                                 // 耳割法每次割周长最短的
 export const POLY_MAX_VERTS_PER_POLY = 6;                         // 每个多边形的最大顶点数
-//export const POLY_MERGE_LONGEST_EDGE_FIRST = true;              // 优先合并最长边
+export const POLY_MERGE_LONGEST_EDGE_FIRST = true;                // 优先合并最长边
 export const POLY_DETAIL_SAMPLE_DIST = 3;                         // 构建细节网格时，相邻采样点之间的“间距”,选3耗时比较合适
+export const POLY_DETAIL_HEIGHT_ERROR = 5;                        // 构建细节网格时，采样点和计算点之差如果小于这个高度阈值就跳过
 //其他参数
 export const MAX_WALK_HEIGHT = 13 / MESH_CELL_SIZE_Z;             // 怪物最大可行走高度（体素单位）
-export const MAX_JUMP_HEIGHT = 65 / MESH_CELL_SIZE_Z;             // 怪物最大可跳跃高度（体素单位）
+export const MAX_JUMP_HEIGHT = 64 / MESH_CELL_SIZE_Z;             // 怪物最大可跳跃高度（体素单位）
 export const AGENT_RADIUS = 15 / MESH_CELL_SIZE_XY;               // 人物通过所需宽度大小（长度）
 export const AGENT_HEIGHT = 72 / MESH_CELL_SIZE_Z;                // 人物高度（体素单位）
 //生成参数
 export const PRINT_NAV_MESH = false;                              // 是否打印导航网格
-export const LOAD_STATIC_MESH = true;                             // 载入静态导航网格，载入静态网格时，不能debug
+export const LOAD_STATIC_MESH = false;                            // 载入静态导航网格，载入静态网格时，不能debug
 //==============================Debug设置=======================================
-export const MESH_DEBUG=false;                                    // 显示体素化后体素
-export const REGION_DEBUG=false;                                  // 显示区域
-export const CONTOUR_DEBUG=false;                                 // 显示区域简化后的轮廓
-export const POLY_DEBUG=false;                                    // 显示最后的三角形
-export const JUMP_LINK_DEBUG=false;                               // 显示跳点
-export const LOAD_DEBUG=true;                                     // 载入静态数据时可开启，查看是否导入成功
+export const MESH_DEBUG = false;                                  // 显示体素化后体素
+export const REGION_DEBUG = false;                                // 显示区域
+export const CONTOUR_DEBUG = false;                               // 显示区域简化后的轮廓
+export const POLY_DEBUG = false;                                   // 显示最后的寻路多边形
+export const POLY_DETAIL_DEBUG = false;                           // 显示最后的细节多边形
+export const JUMP_LINK_DEBUG = false;                              // 显示跳点
+export const LOAD_DEBUG = false;                                  // 载入静态数据时可开启，查看是否导入成功
 //==============================Detour设置======================================
 //A*寻路参数
 export const ASTAR_OPTIMIZATION_1 = false;                        //是否预计算距离，推荐多边形在2000及以下可以打开
 export const ASTAR_BLOCK_SIZE = 128;                              //多边形分块大小
 export const ASTAR_HEURISTIC_SCALE = 1.2;                         //A*推荐数值
 //Funnel参数
-export const FUNNEL_USE = false;                                  //是否启用FUNNEL拉直路径
 export const FUNNEL_DISTANCE = 25;                                //拉直的路径距离边缘多远(0-100，百分比，100%意味着只能走边的中点)
+//高度修正参数
+export const ADJUST_HEIGHT_DISTANCE = 200;                        //路径中每隔这个距离增加一个点，用于修正高度
 
 /**
  * 返回一个随机的颜色

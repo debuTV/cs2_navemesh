@@ -1,7 +1,110 @@
 import { Instance } from 'cs_script/point_script';
 
+//==============================世界相关设置=====================================
+const origin = { x: -2250, y: -1200, z: -200 };
+//==============================Recast设置======================================
+//体素化参数
+const MESH_CELL_SIZE_XY = 5;                               // 体素大小
+const MESH_CELL_SIZE_Z = 1;                                // 体素高度
+const MESH_WORLD_SIZE_XY = 4500;                           // 世界大小
+const MESH_WORLD_SIZE_Z = 480;                             // 世界高度
+const MESH_ERODE_RADIUS = 0;                               // 腐蚀半径，如果一个区域应该不能被走到，但优化1未去除，可以增加此值
+const MESH_HOLE_FILLING = 0;                               // 有些时候莫名其妙有空洞，这时候可以自动填洞,数值越高，越有可能填中
+//区域生成参数
+const REGION_MERGE_AREA = 1024;                            // 合并区域阈值（体素单位）
+const REGION_MIN_AREA = 16;                                // 最小区域面积（体素单位）
+//轮廓生成参数
+const CONT_MAX_ERROR = MESH_CELL_SIZE_XY * 1.2;            // 原始点到简化后边的最大允许偏离距离（长度）
+const POLY_MAX_VERTS_PER_POLY = 6;                         // 每个多边形的最大顶点数
+const POLY_MERGE_LONGEST_EDGE_FIRST = true;                // 优先合并最长边
+const POLY_DETAIL_SAMPLE_DIST = 3;                         // 构建细节网格时，相邻采样点之间的“间距”,选3耗时比较合适
+const POLY_DETAIL_HEIGHT_ERROR = 5;                        // 构建细节网格时，采样点和计算点之差如果小于这个高度阈值就跳过
+//其他参数
+const MAX_WALK_HEIGHT = 13 / MESH_CELL_SIZE_Z;             // 怪物最大可行走高度（体素单位）
+const MAX_JUMP_HEIGHT = 64 / MESH_CELL_SIZE_Z;             // 怪物最大可跳跃高度（体素单位）
+const AGENT_HEIGHT = 72 / MESH_CELL_SIZE_Z;                // 人物高度（体素单位）
 const ASTAR_HEURISTIC_SCALE = 1.2;                         //A*推荐数值
+//Funnel参数
 const FUNNEL_DISTANCE = 25;                                //拉直的路径距离边缘多远(0-100，百分比，100%意味着只能走边的中点)
+//高度修正参数
+const ADJUST_HEIGHT_DISTANCE = 200;                        //路径中每隔这个距离增加一个点，用于修正高度
+/**
+ * 计算空间两点之间的距离的平方
+ * @param {import("cs_script/point_script").Vector} a
+ * @param {import("cs_script/point_script").Vector} b
+ * @returns {number}
+ */
+function posDistance3Dsqr(a, b) {
+    const dx = a.x - b.x; const dy = a.y - b.y; const dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+/**
+ * 计算xy平面两点之间的距离的平方
+ * @param {import("cs_script/point_script").Vector} a
+ * @param {import("cs_script/point_script").Vector} b
+ * @returns {number}
+ */
+function posDistance2Dsqr(a, b) {
+    const dx = a.x - b.x; const dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+/**
+ * 返回pos上方height高度的点
+ * @param {import("cs_script/point_script").Vector} pos
+ * @param {number} height
+ * @returns {import("cs_script/point_script").Vector}
+ */
+function posZfly(pos, height) {
+    return { x: pos.x, y: pos.y, z: pos.z + height };
+}
+/**
+ * 点p到线段ab距离的平方
+ * @param {import("cs_script/point_script").Vector} p
+ * @param {import("cs_script/point_script").Vector} a
+ * @param {import("cs_script/point_script").Vector} b
+ */
+function distPtSegSq(p, a, b) {
+    // 向量 ab 和 ap
+    const abX = b.x - a.x;
+    const abY = b.y - a.y;
+    const apX = p.x - a.x;
+    const apY = p.y - a.y;
+
+    // 计算 ab 向量的平方长度
+    const abSq = abX * abX + abY * abY;
+
+    // 如果线段的起点和终点重合（abSq 为 0），直接计算点到起点的距离
+    if (abSq === 0) {
+        return apX * apX + apY * apY;
+    }
+
+    // 计算点p在ab上的投影 t
+    const t = (apX * abX + apY * abY) / abSq;
+
+    // 计算投影点的位置
+    let nearestX, nearestY;
+
+    if (t < 0) {
+        // 投影点在a点左侧，最近点是a
+        nearestX = a.x;
+        nearestY = a.y;
+    } else if (t > 1) {
+        // 投影点在b点右侧，最近点是b
+        nearestX = b.x;
+        nearestY = b.y;
+    } else {
+        // 投影点在线段上，最近点是投影点
+        nearestX = a.x + t * abX;
+        nearestY = a.y + t * abY;
+    }
+
+    // 计算点p到最近点的距离的平方
+    const dx = p.x - nearestX;
+    const dy = p.y - nearestY;
+
+    return dx * dx + dy * dy;
+}
 /**
  * xy平面上点abc构成的三角形面积的两倍，>0表示ABC逆时针，<0表示顺时针
  * @param {import("cs_script/point_script").Vector} a
@@ -13,6 +116,29 @@ function area(a, b, c) {
     const ac = { x: c.x - a.x, y: c.y - a.y };
     const s2 = (ab.x * ac.y - ac.x * ab.y);
     return s2;
+}
+/**
+ * 返回cur在多边形中是否是锐角
+ * @param {import("cs_script/point_script").Vector} prev
+ * @param {import("cs_script/point_script").Vector} cur
+ * @param {import("cs_script/point_script").Vector} next
+ */
+function isConvex(prev, cur, next) {
+    return area(prev, cur, next) > 0;
+}
+/**
+ * xy平面上点p是否在abc构成的三角形内（不包括边上）
+ * @param {import("cs_script/point_script").Vector} p
+ * @param {import("cs_script/point_script").Vector} a
+ * @param {import("cs_script/point_script").Vector} b
+ * @param {import("cs_script/point_script").Vector} c
+ */
+function pointInTri(p, a, b, c) {
+    const ab = area(a, b, p);
+    const bc = area(b, c, p);
+    const ca = area(c, a, p);
+    //内轮廓与外轮廓那里会有顶点位置相同的时候
+    return ab > 0 && bc > 0 && ca > 0;
 }
 /**
  * 点到线段最近点
@@ -437,7 +563,7 @@ class FunnelPath {
             this.links.get(polyA)?.push(link);
             this.links.get(polyB)?.push(link);
         }
-        Instance.Msg(this.links.size);
+        //Instance.Msg(this.links.size);
     }
     //返回pA到pB的跳点
     /**
@@ -679,200 +805,3648 @@ class FunnelPath {
 
 }
 
-class StaticData
+class OpenSpan {
+    /**
+     * @param {number} floor
+     * @param {number} ceiling
+     * @param {number} id
+     */
+    constructor(floor, ceiling, id) {
+        /**@type {number} */
+        this.floor = floor;
+        /**@type {number} */
+        this.ceiling = ceiling;
+        /**@type {OpenSpan|null} */
+        this.next = null;
+        /**@type {number} */
+        this.id = id;
+
+        /**@type {any[]} */
+        this.neighbors = [null, null, null, null];
+        /**@type {number} */
+        this.distance = 0;
+        /**@type {number} */
+        this.regionId = 0;
+
+        //区域距离场优化
+        this.newDist = 0;
+        //是否在使用
+        this.use=true;
+    }
+
+    /**
+     * @param {OpenSpan} other
+     * @param {number} maxStep
+     * @param {number} agentHeight
+     * @returns {boolean}
+     */
+    canTraverseTo(other, maxStep = MAX_WALK_HEIGHT, agentHeight = AGENT_HEIGHT) {
+        if(!other.use)return false;
+        if (Math.abs(other.floor - this.floor) > maxStep) {
+            return false;
+        }
+
+        const floor = Math.max(this.floor, other.floor);
+        const ceil = Math.min(this.ceiling, other.ceiling);
+
+        if (ceil - floor < agentHeight) {
+            return false;
+        }
+
+        return true;
+    }
+}
+
+class OpenHeightfield {
+    constructor() {
+
+        /**@type {(OpenSpan | null)[][]}*/
+        this.cells = [];
+        /**@type {boolean[][][]}*/
+        this.precells = [];
+        this.SPAN_ID = 1;
+        /**@type {number} */
+        this.gridX = Math.floor(MESH_WORLD_SIZE_XY / MESH_CELL_SIZE_XY) + 1;
+        /**@type {number} */
+        this.gridY = Math.floor(MESH_WORLD_SIZE_XY / MESH_CELL_SIZE_XY) + 1;
+        /**@type {number} */
+        this.gridZ = Math.floor(MESH_WORLD_SIZE_Z / MESH_CELL_SIZE_Z) + 1;
+    }
+    init() {
+        const minZ = origin.z;
+        const maxZ = origin.z + MESH_WORLD_SIZE_Z;
+
+        for (let x = 0; x < this.gridX; x++) {
+            this.cells[x] = [];
+            for (let y = 0; y < this.gridY; y++) {
+                const worldX = origin.x + x * MESH_CELL_SIZE_XY;
+                const worldY = origin.y + y * MESH_CELL_SIZE_XY;
+
+                this.cells[x][y] = this.voxelizeColumn(worldX, worldY, minZ, maxZ);
+            }
+        }
+        this.erode(MESH_ERODE_RADIUS);
+    }
+
+    /**
+     * @param {number} wx
+     * @param {number} wy
+     * @param {number} minZ
+     * @param {number} maxZ
+     */
+    voxelizeColumn(wx, wy, minZ, maxZ) {
+        let head = null;
+        let currentZ = maxZ;
+        const radius = MESH_CELL_SIZE_XY / 2+ MESH_HOLE_FILLING;
+
+        while (currentZ >= minZ + radius) {
+            //寻找地板 (floor)
+            const downStart = { x: wx, y: wy, z: currentZ };
+            const downEnd = { x: wx, y: wy, z: minZ };
+            const downTr = Instance.TraceSphere({ radius, start: downStart, end: downEnd, ignorePlayers: true });
+
+            if (!downTr || !downTr.didHit) break; // 下面没东西了，结束
+
+            const floorZ = downTr.end.z - radius;
+
+            //从地板向上寻找天花板 (ceiling)
+            const upStart = { x: wx, y: wy, z: downTr.end.z + 1 };
+            const upEnd = { x: wx, y: wy, z: maxZ };
+            const upTr = Instance.TraceSphere({ radius, start: upStart, end: upEnd, ignorePlayers: true });
+
+            let ceilingZ = maxZ;
+            if (upTr.didHit) ceilingZ = upTr.end.z + radius;
+
+            const floor = Math.round((floorZ - origin.z) / MESH_CELL_SIZE_Z);
+            const ceiling = Math.round((ceilingZ - origin.z) / MESH_CELL_SIZE_Z);
+
+            if ((ceiling - floor) >= AGENT_HEIGHT) {
+                const newSpan = new OpenSpan(floor, ceiling, this.SPAN_ID++);
+
+                if (!head || floor < head.floor) {
+                    newSpan.next = head;
+                    head = newSpan;
+                } else {
+                    let curr = head;
+                    while (curr.next && curr.next.floor < floor) {
+                        curr = curr.next;
+                    }
+                    newSpan.next = curr.next;
+                    curr.next = newSpan;
+                }
+            }
+
+            currentZ = floorZ - radius - 1;
+        }
+
+        return head;
+    }
+    //筛选不能去的区域
+    findcanwalk() {
+        const slist = Instance.FindEntitiesByClass("info_target");
+        /**@type {Entity|undefined} */
+        let s;
+        slist.forEach((i) => {
+            if (i.GetEntityName() == "navmesh") {
+                s = i;
+                return;
+            }
+        });
+        if (!s) return;
+        const dirs = [
+            { dx: -1, dy: 0 },
+            { dx: 0, dy: 1 },
+            { dx: 1, dy: 0 },
+            { dx: 0, dy: -1 }
+        ];
+        let vis = Array(this.SPAN_ID + 5).fill(false);
+        const centerPos = s.GetAbsOrigin();
+        const cx = Math.ceil((centerPos.x - origin.x) / MESH_CELL_SIZE_XY);
+        const cy = Math.ceil((centerPos.y - origin.y) / MESH_CELL_SIZE_XY);
+        const cz = Math.ceil((centerPos.z - origin.z) / MESH_CELL_SIZE_Z) + 2;
+        /**@type {OpenSpan|null} */
+        let startSpan = this.cells[cx][cy];
+        while (startSpan) {
+            if (startSpan.use&&cz <= startSpan.ceiling && cz >= startSpan.floor) break;
+            startSpan = startSpan.next;
+        }
+        if (!startSpan) return;
+        let queue = [{ span: startSpan, i: cx, j: cy }];
+        vis[startSpan.id] = true;
+        while (queue.length > 0) {
+            let currentSpan = queue.shift();
+            if (!currentSpan) break;
+            for (let dir = 0; dir < 4; dir++) {
+                const nx = currentSpan.i + dirs[dir].dx;
+                const ny = currentSpan.j + dirs[dir].dy;
+                if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+                /**@type {OpenSpan|null} */
+                let neighbor = this.cells[nx][ny];
+                while (neighbor) {
+                    if(neighbor.use)
+                    {
+                        if (!vis[neighbor.id]) {
+                            // 检查是否可以通过
+                            if (currentSpan.span.canTraverseTo(neighbor, MAX_JUMP_HEIGHT, AGENT_HEIGHT)) {
+                                vis[neighbor.id] = true;
+                                queue.push({ span: neighbor, i: nx, j: ny });
+                            }
+                        }
+                    }
+                    neighbor = neighbor.next;
+                }
+            }
+        }
+        // 遍历所有的cell
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                //let prevSpan = null;
+                /**@type {OpenSpan|null} */
+                let currentSpan = this.cells[i][j];
+                while (currentSpan) {
+                    if(currentSpan.use)
+                    {
+                        if (!vis[currentSpan.id]) {
+                            // 如果当前span不可达，则删除它
+                            currentSpan.use=false;
+                            //if (prevSpan) {
+                            //    // 如果有前驱节点，跳过当前节点
+                            //    prevSpan.next = currentSpan.next;
+                            //} else {
+                            //    // 如果没有前驱节点，说明是链表的第一个节点，直接修改
+                            //    this.cells[i][j] = currentSpan.next;
+                            //}
+                        } //else {
+                            // 如果当前span是可达的，更新prevSpan
+                           // prevSpan = currentSpan;
+                        //}
+                        // 继续遍历下一个span
+                    }
+                    currentSpan = currentSpan.next;
+                }
+            }
+        }
+    }
+    /**
+     * 根据半径腐蚀可行走区域
+     * @param {number} radius
+     */
+    erode(radius) {
+        if (radius <= 0) return;
+
+        // 1. 初始化距离场，默认给一个很大的值
+        // 使用 Uint16Array 节省内存，索引为 span.id
+        const distances = new Uint16Array(this.SPAN_ID + 1).fill(65535);
+        const dirs = [{ dx: -1, dy: 0 }, { dx: 0, dy: 1 }, { dx: 1, dy: 0 }, { dx: 0, dy: -1 }];
+
+        // 2. 标记边界点（距离为 0）
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                let span = this.cells[i][j];
+                while (span) {
+                    if(span.use)
+                    {
+                        let isBoundary = false;
+                        for (let d = 0; d < 4; d++) {
+                            const nx = i + dirs[d].dx;
+                            const ny = j + dirs[d].dy;
+
+                            // 触碰地图边界或没有邻居，即为边界
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) {
+                                isBoundary = true;
+                                break;
+                            }
+
+                            let hasNeighbor = false;
+                            let nspan = this.cells[nx][ny];
+                            while (nspan) {
+                                if(nspan.use)
+                                {
+                                    if (span.canTraverseTo(nspan,MAX_JUMP_HEIGHT,AGENT_HEIGHT)) {
+                                        hasNeighbor = true;
+                                        break;
+                                    }
+                                }
+                                nspan = nspan.next;
+                            }
+
+                            if (!hasNeighbor) {
+                                isBoundary = true;
+                                break;
+                            }
+                        }
+
+                        if (isBoundary) distances[span.id] = 0;
+                    }
+                    span = span.next;
+                }
+            }
+        }
+
+        // 3. 两次遍历计算精确距离场 (Pass 1: Top-Left to Bottom-Right)
+        this._passDist(distances, true);
+        // (Pass 2: Bottom-Right to Top-Left)
+        this._passDist(distances, false);
+
+        // 4. 根据 AGENT_RADIUS 删除不合格的 Span
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                //let prevSpan = null;
+                let currentSpan = this.cells[i][j];
+                while (currentSpan) {
+                    if(currentSpan.use)
+                    {
+                        // 如果距离边界太近，则剔除
+                        if (distances[currentSpan.id] < radius) {
+                            currentSpan.use=false;
+                            //if (prevSpan) prevSpan.next = currentSpan.next;
+                            //else this.cells[i][j] = currentSpan.next;
+                        } //else {
+                        //  prevSpan = currentSpan;
+                        //}
+                    }
+                    currentSpan = currentSpan.next;
+                }
+            }
+        }
+    }
+
+    /**
+     * 内部辅助：距离场传递
+     * @param {Uint16Array<ArrayBuffer>} distances
+     * @param {boolean} forward
+     */
+    _passDist(distances, forward) {
+        const dirs = [{ dx: -1, dy: 0 }, { dx: 0, dy: 1 }, { dx: 1, dy: 0 }, { dx: 0, dy: -1 }];
+        const startX = forward ? 0 : this.gridX - 1;
+        const endX = forward ? this.gridX : -1;
+        const step = forward ? 1 : -1;
+
+        for (let i = startX; i !== endX; i += step) {
+            for (let j = forward ? 0 : this.gridY - 1; j !== (forward ? this.gridY : -1); j += step) {
+                let span = this.cells[i][j];
+                while (span) {
+                    if(span.use)
+                    {
+                        for (let d = 0; d < 4; d++) {
+                            const nx = i + dirs[d].dx;
+                            const ny = j + dirs[d].dy;
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+
+                            let nspan = this.cells[nx][ny];
+                            while (nspan) {
+                                if(nspan.use)
+                                {
+                                    if (span.canTraverseTo(nspan,MAX_JUMP_HEIGHT,AGENT_HEIGHT)) {
+                                        // 核心公式：当前点距离 = min(当前距离, 邻居距离 + 1)
+                                        distances[span.id] = Math.min(distances[span.id], distances[nspan.id] + 1);
+                                    }
+                                }
+                                nspan = nspan.next;
+                            }
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+    }
+    deleteboundary() {
+        let boundary = Array(this.SPAN_ID + 5).fill(false);
+        const dirs = [
+            { dx: -1, dy: 0 },
+            { dx: 0, dy: 1 },
+            { dx: 1, dy: 0 },
+            { dx: 0, dy: -1 }
+        ];
+        // 遍历所有的cell
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                let neighbors = [false, false, false, false];
+                /**@type {OpenSpan|null} */
+                let span = this.cells[i][j];
+                while (span) {
+                    if(span.use)
+                    {
+                        for (let d = 0; d < 4; d++) {
+                            const nx = i + dirs[d].dx;
+                            const ny = j + dirs[d].dy;
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+                            /**@type {OpenSpan|null} */
+                            let nspan = this.cells[nx][ny];
+                            while (nspan) {
+                                if(nspan.use)
+                                {
+                                    if (span.canTraverseTo(nspan)) {
+                                        neighbors[d] = true;
+                                    }
+                                }
+                                nspan = nspan.next;
+                            }
+                        }
+                        if (!(neighbors[0] && neighbors[1] && neighbors[2] && neighbors[3])) {
+                            boundary[span.id] = true;
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                //let prevSpan = null;
+                /**@type {OpenSpan|null} */
+                let currentSpan = this.cells[i][j];
+                while (currentSpan) {
+                    if(currentSpan.use)
+                    {
+                        if (boundary[currentSpan.id]) {
+                            currentSpan.use=false;
+                            //// 如果当前span不可达，则删除它
+                            //if (prevSpan) {
+                            //    // 如果有前驱节点，跳过当前节点
+                            //    prevSpan.next = currentSpan.next;
+                            //} else {
+                            //    // 如果没有前驱节点，说明是链表的第一个节点，直接修改
+                            //    this.cells[i][j] = currentSpan.next;
+                            //}
+                        }// else {
+                            // 如果当前span是可达的，更新prevSpan
+                         //   prevSpan = currentSpan;
+                        //}
+                        // 继续遍历下一个span
+                    }
+                    currentSpan = currentSpan.next;
+                }
+            }
+        }
+    }
+    deletealone() {
+        let del = Array(this.SPAN_ID + 5).fill(false);
+        const dirs = [
+            { dx: -1, dy: 0 },
+            { dx: 0, dy: 1 },
+            { dx: 1, dy: 0 },
+            { dx: 0, dy: -1 }
+        ];
+        // 遍历所有的cell
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                let neighbors = [false, false, false, false];
+                /**@type {OpenSpan|null} */
+                let span = this.cells[i][j];
+                while (span) {
+                    if(span.use)
+                    {
+                        for (let d = 0; d < 4; d++) {
+                            const nx = i + dirs[d].dx;
+                            const ny = j + dirs[d].dy;
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+                            /**@type {OpenSpan|null} */
+                            let nspan = this.cells[nx][ny];
+                            while (nspan) {
+                                if(nspan.use)
+                                {
+                                    if (span.canTraverseTo(nspan)) {
+                                        neighbors[d] = true;
+                                    }
+                                }
+                                nspan = nspan.next;
+                            }
+                        }
+                        if ((neighbors[0] ? 1 : 0) + (neighbors[1] ? 1 : 0) + (neighbors[2] ? 1 : 0) + (neighbors[3] ? 1 : 0) <= 1) {
+                            del[span.id] = true;
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                /**@type {OpenSpan|null} */
+                let currentSpan = this.cells[i][j];
+                while (currentSpan) {
+                    if(currentSpan.use)
+                    {
+                        if (del[currentSpan.id]) {
+                            currentSpan.use=false;
+                            // 如果当前span不可达，则删除它
+                            //if (prevSpan) {
+                            //    // 如果有前驱节点，跳过当前节点
+                            //    prevSpan.next = currentSpan.next;
+                            //} else {
+                            //    // 如果没有前驱节点，说明是链表的第一个节点，直接修改
+                            //    this.cells[i][j] = currentSpan.next;
+                            //}
+                        } //else {
+                           // prevSpan = currentSpan;
+                        //}
+                    }
+                    currentSpan = currentSpan.next;
+                }
+            }
+        }
+    }
+    debug(duration = 30) {
+        for (let i = 0; i < this.gridX; i++) {
+            for (let j = 0; j < this.gridY; j++) {
+                /**@type {OpenSpan|null} */
+                let span = this.cells[i][j];
+                while (span) {
+                    if(span.use==true)
+                    {
+                        const c = {
+                            r: 255,
+                            g: 255,
+                            b: 0
+                        };
+                        Instance.DebugSphere({
+                            center: {
+                                x: origin.x + i * MESH_CELL_SIZE_XY,
+                                y: origin.y + j * MESH_CELL_SIZE_XY,
+                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                            },
+                            radius: 3,
+                            duration,
+                            color: c
+                        });
+                    }
+                    //Instance.DebugBox({ 
+                    //    mins: { 
+                    //        x: origin.x+i*MESH_CELL_SIZE_XY - MESH_CELL_SIZE_XY/2, 
+                    //        y: origin.y+j*MESH_CELL_SIZE_XY - MESH_CELL_SIZE_XY/2, 
+                    //        z: origin.z +span.floor*MESH_CELL_SIZE_Z
+                    //    },
+                    //    maxs: { 
+                    //        x: origin.x+i*MESH_CELL_SIZE_XY + MESH_CELL_SIZE_XY/2, 
+                    //        y: origin.y+j*MESH_CELL_SIZE_XY + MESH_CELL_SIZE_XY/2, 
+                    //        z: origin.z +span.floor*MESH_CELL_SIZE_Z+5
+                    //    }, 
+                    //    duration: duration, 
+                    //    color: c
+                    //});
+                    span = span.next;
+                }
+            }
+        }
+    }
+}
+
+class RegionGenerator {
+    /**
+     * @param {OpenHeightfield} openHeightfield
+     */
+    constructor(openHeightfield) {
+        /**@type {(OpenSpan|null)[][]} */
+        this.hf = openHeightfield.cells;
+        /**@type {number} */
+        this.gridX = openHeightfield.gridX;
+        /**@type {number} */
+        this.gridY = openHeightfield.gridY;
+        this.regions = [];
+        /**@type {number} */
+        this.nextRegionId = 1;
+    }
+
+    init() {
+        this.buildCompactNeighbors();
+        this.buildDistanceField();
+        this.buildRegionsWatershed();
+        this.mergeAndFilterRegions();
+    }
+    //为span建立邻居关系
+    buildCompactNeighbors() {
+        const dirs = [
+            { dx: -1, dy: 0 },
+            { dx: 0, dy: 1 },
+            { dx: 1, dy: 0 },
+            { dx: 0, dy: -1 }
+        ];
+
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        span.neighbors = [null, null, null, null];
+
+                        for (let d = 0; d < 4; d++) {
+                            const nx = x + dirs[d].dx;
+                            const ny = y + dirs[d].dy;
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+
+                            let best = null;
+                            let bestDiff = Infinity;
+                            /**@type {OpenSpan|null} */
+                            let nspan = this.hf[nx][ny];
+
+                            while (nspan) {
+                                if(nspan.use)
+                                {
+                                    if (span.canTraverseTo(nspan)) {
+                                        const diff = Math.abs(span.floor - nspan.floor);
+                                        if (diff < bestDiff) {
+                                            best = nspan;
+                                            bestDiff = diff;
+                                        }
+                                    }
+                                }
+                                nspan = nspan.next;
+                            }
+
+                            span.neighbors[d] = best;
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+    }
+    /**
+     * 获取邻居。
+     * @param {OpenSpan} span 
+     * @param {number} dir 方向 (0:W, 1:N, 2:E, 3:S)
+     * @returns {OpenSpan|null}
+     */
+    getNeighbor(span, dir) {
+        return span.neighbors[dir];
+    }
+
+    /**
+     * 获取对角线邻居。
+     * 例如：西北 (NW) = 先向西(0)再向北(1)
+     * @param {OpenSpan} span 
+     * @param {number} dir1 
+     * @param {number} dir2 
+     */
+    getDiagonalNeighbor(span, dir1, dir2) {
+        const n = span.neighbors[dir1];
+        if (n) {
+            return n.neighbors[dir2];
+        }
+        return null;
+    }
+    //构建距离场
+    buildDistanceField() {
+        // 1. 初始化：边界设为0，内部设为无穷大
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        // 如果任意一个邻居缺失，说明是边界
+                        span.distance = this.isBorderSpan(span) ? 0 : Infinity;
+                    }
+                    span = span.next;
+                }
+            }
+        }
+
+        // 第一遍扫描：从左下到右上
+        // 西(0)、西南(0+3)、南(3)、东南(3+2)
+        for (let y = 0; y < this.gridY; y++) {
+            for (let x = 0; x < this.gridX; x++) {
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.distance > 0) {
+                            // 西
+                            let n = this.getNeighbor(span, 0);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 西南
+                            let nd = this.getDiagonalNeighbor(span, 0, 3);
+                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            // 南
+                            n = this.getNeighbor(span, 3);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 东南
+                            nd = this.getDiagonalNeighbor(span, 3, 2);
+                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+
+        // 第二遍扫描：从右上到左下
+        // 东(2)、东北(2+1)、北(1)、西北(1+0)
+        for (let y = this.gridY - 1; y >= 0; y--) {
+            for (let x = this.gridX - 1; x >= 0; x--) {
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.distance > 0) {
+                            // 东
+                            let n = this.getNeighbor(span, 2);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 东北
+                            let nd = this.getDiagonalNeighbor(span, 2, 1);
+                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            // 北
+                            n = this.getNeighbor(span, 1);
+                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            // 西北
+                            let nd2 = this.getDiagonalNeighbor(span, 1, 0);
+                            if (nd2) span.distance = Math.min(span.distance, nd2.distance + 3);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        this.blurDistanceField();
+    }
+    //对距离场进行平滑处理
+    blurDistanceField() {
+        const threshold = 2; //距离阈值，小于的不进行模糊
+
+        //计算模糊后的值
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        //只有远离边界的体素才参与模糊
+                        if (span.distance <= threshold) span.newDist = span.distance;
+                        else {
+                            let d = span.distance;
+                            //计算平均距离
+                            for (let i = 0; i < 4; i++) {
+                                const n = span.neighbors[i];
+                                if (n) d += n.distance;
+                                else d += span.distance;
+                            }
+                            span.newDist = Math.floor((d + 2) / 5);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.newDist !== undefined) {
+                            span.distance = span.newDist;
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+    }
+    /**
+     * 计算当前span从dir方向过来的距离
+     * @param {OpenSpan} span
+     * @param {number} dir
+     */
+    sample(span, dir) {
+        const n = span.neighbors[dir];
+        if (!n) return Infinity;
+
+        return n.distance + 2;
+    }
+
+    /**
+     * 是否是边界span
+     * @param {OpenSpan} span
+     */
+    isBorderSpan(span) {
+        for (let d = 0; d < 4; d++) {
+            if (!span.neighbors[d]) return true;
+        }
+        return false;
+    }
+
+    //洪水扩张
+    buildRegionsWatershed() {
+        const spans = [];
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        span.regionId = 0;
+                        if (span.distance >= 0) {
+                            spans.push(span);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        //从大到小排序
+        spans.sort((a, b) => b.distance - a.distance);
+
+        for (const span of spans) {
+
+            let bestRegion = 0;
+            let maxNeighborDist = -1;
+
+            for (let d = 0; d < 4; d++) {
+                const n = span.neighbors[d];
+                if (!n) continue;
+
+                //如果邻居已经有Region了，说明这个邻居比当前span更靠近“中心”
+
+                if (n.regionId > 0) {
+                    if (n.distance > maxNeighborDist) {
+                        maxNeighborDist = n.distance;
+                        bestRegion = n.regionId;
+                    }
+                }
+            }
+
+            if (bestRegion !== 0) span.regionId = bestRegion;
+            else span.regionId = this.nextRegionId++;
+        }
+        //this.floodRemaining();
+        //this.mergeAndFilterRegions();
+    }
+    //abandon
+    floodRemaining() {
+        //填补距离为0的边界缝隙
+        let changed = true;
+        let iterCount = 0;
+        while (changed && iterCount < 5) {
+            changed = false;
+            iterCount++;
+            for (let x = 0; x < this.gridX; x++) {
+                for (let y = 0; y < this.gridY; y++) {
+                    let span = this.hf[x][y];
+                    while (span) {
+                        if(span.use)
+                        {
+                            //如果当前没有区域
+                            if (span.regionId === 0) {
+                                let bestRegion = 0;
+                                let bestDist = -1;
+                                for (let d = 0; d < 4; d++) {
+                                    const n = span.neighbors[d];
+                                    if (n && n.regionId > 0) {
+                                        if (n.distance > bestDist) {
+                                            bestDist = n.distance;
+                                            bestRegion = n.regionId;
+                                        }
+                                    }
+                                }
+                                if (bestRegion > 0) {
+                                    span.regionId = bestRegion;
+                                    changed = true;
+                                }
+                            }
+                        }
+                        span = span.next;
+                    }
+                }
+            }
+        }
+    }
+
+    //合并过滤小region
+    mergeAndFilterRegions() {
+        /**@type {Map<number,OpenSpan[]>} */
+        const regionSpans = new Map();
+
+        //统计每个region包含的span
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        //合并过小的region
+        for (const [id, spans] of regionSpans) {
+            if (spans.length >= REGION_MERGE_AREA) continue;
+            const neighbors = new Map();
+            for (const span of spans) {
+                for (let d = 0; d < 4; d++) {
+                    const n = span.neighbors[d];
+                    if (n && n.regionId !== id) {
+                        neighbors.set(
+                            n.regionId,
+                            (neighbors.get(n.regionId) ?? 0) + 1
+                        );
+                    }
+                }
+            }
+
+            let best = 0;
+            let bestCount = 0;
+            for (const [nid, count] of neighbors) {
+                if (count > bestCount) {
+                    best = nid;
+                    bestCount = count;
+                }
+            }
+
+            if (best > 0) {
+                for (const span of spans) {
+                    span.regionId = best;
+                    regionSpans.get(span.regionId)?.push(span);
+                }
+                regionSpans.set(id, []);
+            }
+        }
+        //统计每个region包含的span
+        regionSpans.clear();
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        //忽略过小的region
+        for (const [id, spans] of regionSpans) {
+            if (spans.length >= REGION_MIN_AREA) continue;
+            for (const span of spans) {
+                if (span.regionId == id) span.regionId = 0;
+            }
+        }
+    }
+    //abandon
+    smooth() {
+        /**@type {Map<number,OpenSpan[]>} */
+        const regionSpans = new Map();
+        //统计每个region包含的span
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        for (const [id, spans] of regionSpans) {
+            let smoth = true;
+            while (smoth) {
+                smoth = false;
+                let diff = 0;
+                let df = [];
+                outer:
+                for (const span of spans) {
+                    if (span.regionId != id) continue;
+                    for (let d = 0; d < 4; d++) {
+                        const n = span.neighbors[d];
+                        if (n && n.regionId !== id) {
+                            df[diff] = n.regionId;
+                            diff++;
+                        }
+                    }
+                    if (diff == 3) {
+                        //这个span周围有三个不同于自身的区域
+                        if (df[0] == df[1]) {
+                            span.regionId = df[0];
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                        else if (df[1] == df[2]) {
+                            span.regionId = df[1];
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                        else if (df[0] == df[2]) {
+                            span.regionId = df[0];
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                        else {
+                            //四个区域不相同加入旁边
+                            span.regionId = df[0];
+                            regionSpans.get(span.regionId)?.push(span);
+                        }
+                        smoth = true;
+                        break outer;
+                    }
+                }
+            }
+        }
+    }
+    /**
+     * Debug: 绘制 Region（按 regionId 上色）
+     * @param {number} duration
+     */
+    debugDrawRegions(duration = 5) {
+        const colorCache = new Map();
+
+        const randomColor = (/** @type {number} */ id) => {
+            if (!colorCache.has(id)) {
+                colorCache.set(id, {
+                    r: (id * 97) % 255,
+                    g: (id * 57) % 255,
+                    b: (id * 17) % 255
+                });
+            }
+            return colorCache.get(id);
+        };
+
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            const c = randomColor(span.regionId);
+
+                            const center = {
+                                x: origin.x + (x + 0.5) * MESH_CELL_SIZE_XY,
+                                y: origin.y + (y + 0.5) * MESH_CELL_SIZE_XY,
+                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                            };
+
+                            Instance.DebugSphere({
+                                center,
+                                radius: MESH_CELL_SIZE_XY * 0.3,
+                                color: c,
+                                duration
+                            });
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+    }
+    /**
+     * Debug: 绘制 Distance Field（亮度 = 距离）
+     */
+    debugDrawDistance(duration = 5) {
+        let maxDist = 0;
+
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        maxDist = Math.max(maxDist, span.distance);
+                    }
+                    span = span.next;
+                }
+            }
+        }
+
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.distance < Infinity) {
+                            const t = span.distance / maxDist;
+                            const c = {
+                                r: Math.floor(255 * t),
+                                g: Math.floor(255 * (1 - t)),
+                                b: 0
+                            };
+
+                            Instance.DebugSphere({
+                                center: {
+                                    x: origin.x + x * MESH_CELL_SIZE_XY,
+                                    y: origin.y + y * MESH_CELL_SIZE_XY,
+                                    z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                                },
+                                radius: MESH_CELL_SIZE_XY * 0.25,
+                                color: c,
+                                duration
+                            });
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+    }
+
+}
+
+class ContourBuilder {
+    /**
+     * @param {OpenHeightfield} hf
+     */
+    constructor(hf) {
+        /** @type {(OpenSpan|null)[][]} */
+        this.hf = hf.cells;
+        this.gridX = hf.gridX;
+        this.gridY = hf.gridY;
+
+        /** @type {Contour[][]} */
+        this.contours = [];
+        this.cornerHeightCache = new Map();
+    }
+
+    /**
+     * 边界边：没有邻居，或邻居 region 不同
+     * @param {OpenSpan} span
+     * @param {number} dir
+     */
+    isBoundaryEdge(span, dir) {
+        const n = span.neighbors[dir];
+        return !n || n.regionId !== span.regionId;
+    }
+    /**
+     * @param {OpenSpan} span
+     * @param {number} dir
+     */
+    getNeighborregionid(span, dir) {
+        const n = span.neighbors[dir];
+        if (n) return n.regionId;
+        else return 0;
+    }
+    /**
+     * @param {number} x
+     * @param {number} y
+     * @param {OpenSpan} span
+     * @param {number} dir
+     */
+    edgeKey(x, y, span, dir) {
+        return `${x},${y},${span.id},${dir}`;
+    }
+
+    /**
+     * @param {number} x
+     * @param {number} y
+     * @param {number} dir
+     */
+    move(x, y, dir) {
+        switch (dir) {
+            case 0: return { x: x - 1, y };
+            case 1: return { x, y: y + 1 };
+            case 2: return { x: x + 1, y };
+            case 3: return { x, y: y - 1 };
+        }
+        return { x, y };
+    }
+
+    /**
+     * dir对应的cell角点
+     * @param {number} x
+     * @param {number} y
+     * @param {number} dir
+     */
+    corner(x, y, dir) {
+        switch (dir) {
+            case 0: return { x, y };
+            case 1: return { x, y: y + 1 };
+            case 2: return { x: x + 1, y: y + 1 };
+            case 3: return { x: x + 1, y };
+        }
+        return { x, y };
+    }
+    /**
+     * 判断线段 (p1, p2) 和 (p3, p4) 是否相交
+     * @param {import("cs_script/point_script").Vector} p1
+     * @param {import("cs_script/point_script").Vector} p2
+     * @param {import("cs_script/point_script").Vector} p3
+     * @param {import("cs_script/point_script").Vector} p4
+     * @param {boolean} checkpoint //是否包含端点
+     */
+    segmentsIntersect(p1, p2, p3, p4, checkpoint) {
+        const crossProduct = (/** @type {{ x: any; y: any; z?: number; }} */ a, /** @type {{ x: any; y: any; z?: number; }} */ b, /** @type {{ x: any; y: any; z?: number; }} */ c) => (c.y - a.y) * (b.x - a.x) - (b.y - a.y) * (c.x - a.x);
+        // 快速排斥实验 + 跨立实验
+        const d1 = crossProduct(p1, p2, p3);
+        const d2 = crossProduct(p1, p2, p4);
+        const d3 = crossProduct(p3, p4, p1);
+        const d4 = crossProduct(p3, p4, p2);
+        if (checkpoint) return (d1 * d2 <= 0 && d3 * d4 <= 0);
+        return (d1 * d2 < 0 && d3 * d4 < 0);
+        //return (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
+    }
+    /**
+     * @param {Contour} holePt
+     * @param {Contour[]} outer
+     * @param {Contour[][]} holos
+     * @param {number} innerid
+     */
+    findBridgeOuterIndex(holePt, outer, holos, innerid) {
+        const inner = holos[innerid];
+        let bestDistsq = Infinity;
+        let bestIdx = -1;
+
+        for (let i = 0; i < outer.length; i++) {
+            const a = outer[i];
+            //1.计算距离
+            const dx = holePt.x - a.x;
+            const dy = holePt.y - a.y;
+            const distSq = dx * dx + dy * dy;
+
+            //2.如果比当前最好的还远，直接跳过
+            if (distSq >= bestDistsq) continue;
+            //3.桥连线(holePt -> outerPt)是否与外圈的任何一条边相交
+            let intersects = false;
+            for (let j = 0; j < outer.length; j++) {
+                const p1 = outer[j];
+                const p2 = outer[(j + 1) % outer.length];
+
+                if (j === i || (j + 1) % outer.length === i) continue;
+                if (this.segmentsIntersect(holePt, a, p1, p2, true)) {
+                    intersects = true;
+                    break;
+                }
+            }
+            if (intersects) continue;
+            //4.是否与内圈自身的边相交（处理洞的凹陷部分）
+            for (let j = 0; j < inner.length; j++) {
+                const p1 = inner[j];
+                const p2 = inner[(j + 1) % inner.length];
+                // 忽略包含起点 holePt 的两条边
+                if (p1 === holePt || p2 === holePt) continue;
+                if (this.segmentsIntersect(holePt, a, p1, p2, true)) {
+                    intersects = true;
+                    break;
+                }
+            }
+            if (intersects) continue;
+            //5.是否与剩下几个未合并的内轮廓边相交
+            for (let k = innerid + 1; k < holos.length; k++) {
+                for (let j = 0; j < holos[k].length; j++) {
+                    const p1 = holos[k][j];
+                    const p2 = holos[k][(j + 1) % holos[k].length];
+                    if (this.segmentsIntersect(holePt, a, p1, p2, true)) {
+                        intersects = true;
+                        break;
+                    }
+                }
+            }
+            if (!intersects) {
+                bestDistsq = distSq;
+                bestIdx = i;
+            }
+        }
+
+        return bestIdx;
+    }
+    /**
+     * @param {Contour[]} outer
+     * @param {Contour[][]} holes
+     * @param {number} holeid
+     */
+    mergeHoleIntoOuter(outer, holes, holeid) {
+        const hole = holes[holeid];
+        let oi = -1;
+        let holePt = hole[0];
+        let hi = 0;
+        for (hi = 0; hi < hole.length; hi++) {
+            holePt = hole[hi];
+            oi = this.findBridgeOuterIndex(holePt, outer, holes, holeid);
+            if (oi >= 0) break;
+        }
+        if (oi < 0) {
+            Instance.Msg("没有找到桥连接内外轮廓");
+            return outer;
+        }
+        /**@type {Contour[]} */
+        const merged = [];
+
+        // 1. outer → bridge 点
+        for (let i = 0; i <= oi; i++) {
+            merged.push(outer[i]);
+        }
+
+        // 2. bridge → hole 起点
+        merged.push(holePt);
+
+        // 3. 绕 hole 一圈（从 hi 开始到hole 起点及hi）
+        for (let i = 1; i <= hole.length; i++) {
+            merged.push(hole[(hi + i) % hole.length]);
+        }
+
+        // 4. 回到 outer bridge 点
+        merged.push(outer[oi]);
+
+        // 5. outer 剩余部分
+        for (let i = oi + 1; i < outer.length; i++) {
+            merged.push(outer[i]);
+        }
+
+        return merged;
+    }
+    mergeRegionContours() {
+        /**@type {Map<number,Contour[][]>} */
+        const byRegion = new Map();
+
+        //按region分组
+        for (const c of this.contours) {
+            const rid = c[0].regionId;
+            if (!byRegion.has(rid)) byRegion.set(rid, []);
+            byRegion.get(rid)?.push(c);
+        }
+
+        const mergedContours = [];
+
+        for (const [rid, contours] of byRegion) {
+            /**@type {Contour[]} */
+            let outer = [];
+            const holes = [];
+
+            for (const c of contours) {
+                if (this.computeSignedArea(c) > 0) {
+                    outer = c;
+                } else {
+                    holes.push(c);
+                }
+            }
+
+            if (!outer) continue;
+            //输出区域有几个内轮廓，和多边形生成时报错比较
+            //if(holes.length>0)
+            //{
+            //    Instance.Msg(rid+"=="+holes.length);
+            //}
+
+            //待更新：给hole排序，按某一坐标从小到大
+
+            //逐个把hole融进outer
+            for (let i = 0; i < holes.length; i++) {
+                outer = this.mergeHoleIntoOuter(outer, holes, i);
+            }
+            //outer=this.fixWinding(outer);
+            mergedContours.push(outer);
+        }
+
+        // 用融合后的结果替换
+        this.contours = mergedContours;
+    }
+
+    init() {
+        /** @type {Set<string>} */
+        const visited = new Set();
+
+        for (let x = 0; x < this.gridX; x++) {
+            for (let y = 0; y < this.gridY; y++) {
+                /**@type {OpenSpan|null} */
+                let span = this.hf[x][y];
+                while (span) {
+                    if(span.use)
+                    {
+                        if (span.regionId > 0) {
+                            for (let dir = 0; dir < 4; dir++) {
+                                if (this.isBoundaryEdge(span, dir)) {
+
+                                    const key = this.edgeKey(x, y, span, dir);
+                                    if (visited.has(key)) continue;
+
+                                    let contour = this.traceContour(x, y, span, dir, visited);
+                                    if (contour && contour.length >= 3) {
+                                        //外轮廓：逆时针（CCW）
+                                        //洞轮廓：顺时针（CW）
+                                        contour.length;
+                                        contour = this.simplifyContour(contour);
+                                        if (contour && contour.length >= 3) {
+                                            this.contours.push(contour);
+                                            //Instance.Msg(`{${l}}=>{${contour.length}}`);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    span = span.next;
+                }
+            }
+        }
+        this.mergeRegionContours();
+    }
+    /**
+     * @param {Contour[]} contour
+     */
+    simplifyContour(contour) {
+        const n = contour.length;
+        if (n < 4) return contour.slice();
+        const pts = contour.slice();
+        const locked = new Array(n).fill(0);
+        let locknum = 0;
+        for (let i = 0; i < n; i++) {
+            contour[(i + n - 1) % n];
+            const cur = contour[i];
+            const next = contour[(i + 1) % n];
+            // portal 端点,相邻的1相连
+            if (next.neighborRegionId != cur.neighborRegionId) {
+                locked[i] += 1;
+                locknum++;
+                //Instance.DebugSphere({center:cur,radius:8,duration:120,color:{r:255,g:0,b:0}});
+                //区域切换端点
+            }
+            //方向发生变化，相邻的2相连
+            //if (cur.neighborRegionId==0&&!isCollinear(cur,prev,next)) {
+            //    //Instance.DebugSphere({center:{x:cur.x,y:cur.y,z:cur.z+10},radius:8,duration:120,color:{r:0,g:255,b:0}});
+            //    //转弯端点
+            //    locked[i] += 2;
+            //}
+        }
+        if (locknum == 0) {
+            let minPt = pts[0];
+            let maxPt = pts[0];
+            let minid = 0;
+            let maxid = 0;
+            for (let i = 0; i < n; i++) {
+                const pt = pts[i];
+                if (pt.x < minPt.x || pt.y < minPt.y) {
+                    minPt = pt;
+                    minid = i;
+                }
+                if (pt.x > maxPt.x || pt.y > maxPt.y) {
+                    maxPt = pt;
+                    maxid = i;
+                }
+            }
+            //没有强制顶点，判断为四周都是边境，或者四周都是某一区域，手动指定两个强制顶点
+            locked[minid] = 1;
+            locked[maxid] = 1;
+        }
+        /**@type {Contour[]}*/
+        const out = [];
+        let i = 0;
+        let minI = -1;
+        let maxJ = n;
+        while (i < n - 1) {
+            if (locked[i] == 0) {
+                i++;
+                continue;
+            }
+            if (minI == -1) minI = i;
+            let j = (i + 1);
+            while (j < n - 1 && locked[j] == 0) {
+                j = j + 1;
+            }
+            if (locked[j]) maxJ = j;
+            /**
+             * @type {Contour[]}
+             */
+            if (locked[i] && locked[j]) this.simplifySegmentbymaxErrorSq(pts, locked, i, j, out);
+            i = j;
+        }
+        this.simplifySegmentbymaxErrorSqFinally(pts, locked, maxJ, minI, out, n);
+        return out;
+    }
+    /**
+     * @param {Contour[]} pts
+     * @param {number[]} locked
+     * @param {number} i0
+     * @param {number} i1
+     * @param {Contour[]} out
+     * @param {number}n
+     */
+    simplifySegmentbymaxErrorSqFinally(pts, locked, i0, i1, out, n) {
+        const a = pts[i0];
+        const b = pts[i1];
+        let maxDistSq = 0;
+        let index = -1;
+        for (let i = i0 + 1; i < n; i++) {
+            const d = distPtSegSq(pts[i], a, b);
+            if (d > maxDistSq) {
+                maxDistSq = d;
+                index = i;
+            }
+        }
+        for (let i = 0; i < i1; i++) {
+            const d = distPtSegSq(pts[i], a, b);
+            if (d > maxDistSq) {
+                maxDistSq = d;
+                index = i;
+            }
+        }
+        const maxErrorSq = CONT_MAX_ERROR * CONT_MAX_ERROR;
+
+        if (index !== -1 && maxDistSq > maxErrorSq) {
+            if (index < i0) this.simplifySegmentbymaxErrorSqFinally(pts, locked, i0, index, out, n);
+            else this.simplifySegmentbymaxErrorSq(pts, locked, i0, index, out);
+            if (index < i1) this.simplifySegmentbymaxErrorSq(pts, locked, index, i1, out);
+            else this.simplifySegmentbymaxErrorSqFinally(pts, locked, index, i1, out, n);
+        } else {
+            //只输出起点
+            out.push(a);
+        }
+
+    }
+    /**
+     * @param {Contour[]} pts
+     * @param {number[]} locked
+     * @param {number} i0
+     * @param {number} i1
+     * @param {Contour[]} out
+     */
+    simplifySegmentbymaxErrorSq(pts, locked, i0, i1, out) {
+        const a = pts[i0];
+        const b = pts[i1];
+        let maxDistSq = 0;
+        let index = -1;
+        for (let i = i0 + 1; i < i1; i++) {
+            const d = distPtSegSq(pts[i], a, b);
+            if (d > maxDistSq) {
+                maxDistSq = d;
+                index = i;
+            }
+        }
+        const maxErrorSq = CONT_MAX_ERROR * CONT_MAX_ERROR;
+        if (index !== -1 && maxDistSq > maxErrorSq) {
+            this.simplifySegmentbymaxErrorSq(pts, locked, i0, index, out);
+            this.simplifySegmentbymaxErrorSq(pts, locked, index, i1, out);
+        } else {
+            //只输出起点
+            out.push(a);
+        }
+    }
+    /**
+     * @param {Contour[]} contour
+     */
+    computeSignedArea(contour) {
+        let area = 0;
+        const n = contour.length;
+        for (let i = 0; i < n; i++) {
+            const p = contour[i];
+            const q = contour[(i + 1) % n];
+            area += (p.x * q.y - q.x * p.y);
+        }
+        return area * 0.5;
+    }
+    /**
+     * abandon
+     * @param {Contour[]} contour
+     */
+    fixWinding(contour) {
+        const area = this.computeSignedArea(contour);
+        //外轮廓CCW（area>0）
+        if (area < 0) {
+            contour.reverse();
+        }
+        return contour;
+    }
+
+    /**
+     * @param {number} sx 起始 cell x
+     * @param {number} sy 起始 cell y
+     * @param {OpenSpan} startSpan
+     * @param {number} startDir 起始边方向
+     * @returns {Contour[] | null}
+     * @param {Set<string>} visited
+     */
+    traceContour(sx, sy, startSpan, startDir, visited) {
+        let x = sx;
+        let y = sy;
+        let span = startSpan;
+        let dir = startDir;
+
+        const verts = [];
+
+        let iter = 0;
+        const MAX_ITER = this.gridX * this.gridY * 4;
+        if (!this.isBoundaryEdge(startSpan, startDir)) return null;
+        const startKey = this.edgeKey(x, y, span, dir);
+        while (iter++ < MAX_ITER) {
+            const key = this.edgeKey(x, y, span, dir);
+            //回到起点
+            if (key === startKey && verts.length > 0) break;
+            if (visited.has(key)) {
+                Instance.Msg("奇怪的轮廓边,找了一遍现在又找一遍");
+                return null;
+            }
+            visited.add(key);
+
+            //只有在boundary边才输出顶点
+            if (this.isBoundaryEdge(span, dir)) {
+                const c = this.corner(x, y, dir);
+
+                const h = this.getCornerHeightFromEdge(x, y, span, dir);
+                const nid = this.getNeighborregionid(span, dir);
+                //Instance.Msg(nid);
+                if (h !== null) {
+                    verts.push({
+                        x: origin.x + c.x * MESH_CELL_SIZE_XY-MESH_CELL_SIZE_XY/2,
+                        y: origin.y + c.y * MESH_CELL_SIZE_XY-MESH_CELL_SIZE_XY/2,
+                        z: origin.z + h * MESH_CELL_SIZE_Z,
+                        regionId: span.regionId,      //当前span的region
+                        neighborRegionId: nid   //对面span的region（或 0）
+                    });
+                }
+            }
+
+            //顺序：右转 → 直行 → 左转 → 后转
+            let advanced = false;
+            for (let i = 0; i < 4; i++) {
+                const ndir = (dir + 3 - i + 4) % 4;
+                const nspan = span.neighbors[ndir];
+                //如果这条边是boundary，就沿边走
+                if (!nspan || nspan.regionId !== span.regionId) {
+                    dir = ndir;
+                    advanced = true;
+                    break;
+                }
+                //否则穿过这条边
+                const p = this.move(x, y, ndir);
+                x = p.x;
+                y = p.y;
+                span = nspan;
+                dir = (ndir + 2) % 4;
+                advanced = true;
+                break;
+            }
+
+            if (!advanced) {
+                Instance.Msg("轮廓断啦");
+                return null;
+            }
+        }
+        if (verts.length < 3) return null;
+        return verts;
+    }
+    /**
+     * @param {number} x
+     * @param {number} y
+     * @param {OpenSpan} span
+     * @param {number} dir
+     */
+    getCornerHeightFromEdge(x, y, span, dir) {
+        let maxFloor = span.floor;
+        const leftDir = (dir + 3) & 3;
+        //左侧
+        const p1 = this.move(x, y, leftDir);
+        //前方
+        const p2 = this.move(x, y, dir);
+        //左前方
+        const p3 = this.move(p1.x, p1.y, dir);
+
+        //左侧能到的span
+        if (this.inBounds(p1.x, p1.y)) {
+            /**@type {OpenSpan|null} */
+            let s = this.hf[p1.x][p1.y];
+            while (s) {
+                if(s.use)
+                {
+                    if (span.canTraverseTo(s)) {
+                        if (maxFloor < s.floor) {
+                            maxFloor = s.floor;
+                        }
+                    }
+                }
+                s = s.next;
+            }
+        }
+        //前方能到的span
+        if (this.inBounds(p2.x, p2.y)) {
+            /**@type {OpenSpan|null} */
+            let s = this.hf[p2.x][p2.y];
+            while (s) {
+                if(s.use)
+                {
+                    if (span.canTraverseTo(s)) {
+                        if (maxFloor < s.floor) {
+                            maxFloor = s.floor;
+                        }
+                    }
+                }
+                s = s.next;
+            }
+        }
+        //对角能到的span
+        if (this.inBounds(p3.x, p3.y)) {
+            /**@type {OpenSpan|null} */
+            let s = this.hf[p3.x][p3.y];
+            while (s) {
+                if(s.use)
+                {
+                    if (span.canTraverseTo(s)) {
+                        if (maxFloor < s.floor) {
+                            maxFloor = s.floor;
+                        }
+                    }
+                }
+                s = s.next;
+            }
+        }
+        return maxFloor;
+    }
+    /**
+     * @param {number} x
+     * @param {number} y
+     */
+    inBounds(x, y) {
+        return x >= 0 && y >= 0 && x < this.gridX && y < this.gridY;
+    }
+
+    debugDrawContours(duration = 5) {
+        Instance.Msg(`一共${this.contours.length}个轮廓`);
+        for (const contour of this.contours) {
+            const color = { r: 255 * Math.random(), g: 255 * Math.random(), b: 255 * Math.random() };
+            const z = Math.random() * 20;
+            for (let i = 0; i < contour.length; i++) {
+                const a = contour[i];
+                const b = contour[(i + 1) % contour.length];
+                const start = {
+                    x: a.x,
+                    y: a.y,
+                    z: a.z + z
+                };
+                const end = {
+                    x: b.x,
+                    y: b.y,
+                    z: b.z + z
+                };
+                //if(a.neighborRegionId!=b.neighborRegionId)
+                //{
+                //Instance.DebugSphere({center:start,radius:8,duration,color});
+                //}
+                Instance.DebugLine({
+                    start,
+                    end,
+                    color,
+                    duration
+                });
+            }
+        }
+    }
+}
+/**
+ * @typedef {Object} Contour
+ * @property {number} x
+ * @property {number} y
+ * @property {number} z
+ * @property {number} regionId
+ * @property {number} neighborRegionId
+ */
+
+class PolyMeshBuilder {
+
+    /**
+     * @param {import("./path_contourbuilder").Contour[][]} contours
+     */
+    constructor(contours) {
+        /** @type {import("./path_contourbuilder").Contour[][]} */
+        this.contours = contours;
+
+        /** @type {import("cs_script/point_script").Vector[]} */
+        this.verts = [];
+        /** @type {number[][]} */
+        this.polys = [];
+        /** @type {number[]} */
+        this.regions = [];
+        /** @type {number[][]} */
+        this.neighbors = [];
+    }
+
+    init() {
+        const unmerged=[];
+        for (const contour of this.contours) {
+            const pl=this.mergeTriangles(this.triangulate(contour),POLY_MERGE_LONGEST_EDGE_FIRST);
+            for (const p of pl) {
+                unmerged.push(p);
+            }
+        }
+        //const merged = this.mergeTriangles(unmerged,false);
+        //不能区域间merge，detail需要使用区域id
+        for (const p of unmerged) {
+            this.addPolygon(p);
+        }
+        this.buildAdjacency();
+    }
+    return() {
+        return {
+            verts: this.verts,
+            polys: this.polys,
+            regions: this.regions,
+            neighbors: this.neighbors
+        }
+    }
+    /**
+     * @param {{x:number,y:number,z:number,regionId:number}[]} poly
+     */
+    triangulate(poly) {
+        //
+        const debugid = -1;
+
+        const verts = poly.slice();
+        const result = [];
+
+        let guard = 0;
+        {
+            while (verts.length > 3 && guard++ < 5000) {
+                let bestEar=null;
+                let minPerimeter=Infinity;
+                let bestIndex=-1;
+
+                for (let i = 0; i < verts.length; i++) {
+                    const prev = verts[(i - 1 + verts.length) % verts.length];
+                    const cur = verts[i];
+                    const next = verts[(i + 1) % verts.length];
+                    //cur对应的角度是否<180度
+                    if (!isConvex(prev, cur, next)) continue;
+                    //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
+                    let contains = false;
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (pointInTri(verts[j], prev, cur, next)) {
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) continue;
+                    // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
+                        {
+                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) continue;
+                    const perimeter = 
+                    Math.sqrt(posDistance2Dsqr(prev, cur)) +
+                    Math.sqrt(posDistance2Dsqr(cur, next)) +
+                    Math.sqrt(posDistance2Dsqr(next, prev));
+                
+                    // 找到周长最短的耳朵
+                    if (perimeter < minPerimeter) {
+                        minPerimeter = perimeter;
+                        bestEar = {prev, cur, next};
+                        bestIndex = i;
+                    }
+                }
+                // 如果找到了最佳耳朵，割掉它
+                if (bestEar && bestIndex !== -1) {
+                    result.push([bestEar.prev, bestEar.cur, bestEar.next]);
+                    verts.splice(bestIndex, 1);
+                } else {
+                    // 找不到耳朵，退出循环
+                    break;
+                }
+            }
+        }
+
+        if (verts.length == 3) {
+            result.push([verts[0], verts[1], verts[2]]);
+        }
+        if (verts.length != 3) {
+            //debug
+            if (verts[0].regionId == debugid) {
+                Instance.Msg(poly.length);
+                for (let i = 0; i < poly.length; i++) {
+                    const a = poly[i];
+                    const b = poly[(i + 1) % poly.length];
+                    Instance.DebugLine({ start: a, end: b, color: { r: 125, g: 125, b: 0 }, duration: 30 });
+                }
+                for (let i = 0; i < verts.length; i++) {
+                    const prev = verts[(i - 1 + verts.length) % verts.length];
+                    const cur = verts[i];
+                    const next = verts[(i + 1) % verts.length];
+                    //cur对应的角度是否<180度
+                    if (!isConvex(prev, cur, next)) {
+                        Instance.DebugSphere({ center: cur, radius: 2, duration: 30, color: { r: 255, g: 0, b: 0 } });
+                        continue;
+                    }
+                    //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
+                    let contains = false;
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                        if (pointInTri(verts[j], prev, cur, next)) {
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) {
+                        Instance.DebugSphere({ center: cur, radius: 5, duration: 30, color: { r: 0, g: 255, b: 0 } });
+                        continue;
+                    }
+                    // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
+                    for (let j = 0; j < verts.length; j++) {
+                        if (j == i || j == ((i - 1 + verts.length) % verts.length) || j == ((i + 1) % verts.length)) continue;
+                        if (distPtSegSq(verts[j], prev, next) == 0) {
+                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) {
+                        Instance.DebugSphere({ center: cur, radius: 5, duration: 30, color: { r: 0, g: 0, b: 255 } });
+                        continue;
+                    }
+                }
+                //verts.forEach((e)=>{
+                //    Instance.DebugSphere({center:e,radius:5,duration:30,color:{r:255,g:0,b:0}});
+                //});
+            }
+            Instance.Msg("区域：" + poly[0].regionId + "：出现奇怪小错误,耳割法无法分割多边形,猜测,简化轮廓中的两个点,拥有同一个x,y值");
+        }
+        return result;
+    }
+
+    /**
+     * @param {{x:number,y:number,z:number,regionId:number}[][]} tris
+     * @param {boolean}config//是否合并最长边
+     */
+    mergeTriangles(tris,config) {
+        const polys = tris.map(t => t.slice());
+        let merged=true;
+        if(config)
+        {
+            while (merged) {
+                merged = false;
+                let bdist=-Infinity;
+                let bi=-1;
+                let bj=-1;
+                let binfo=null;
+                for (let i = 0; i < polys.length; i++) {
+                    for (let j = i + 1; j < polys.length; j++) {
+                        const info = this.getMergeInfo(polys[i], polys[j]);
+                        if (info&&info.dist>bdist) {
+                            bdist=info.dist;
+                            bi=i;
+                            bj=j;
+                            binfo=info.info;
+                        }
+                    }
+                }
+                if(binfo)
+                {
+                    polys[bi] = binfo;
+                    polys.splice(bj, 1);
+                    merged = true;
+                }
+            }
+        }
+        else
+        {
+            while (merged) {
+                merged = false;
+                outer:
+                for (let i = 0; i < polys.length; i++) {
+                    for (let j = i + 1; j < polys.length; j++) {
+                        const info = this.getMergeInfo(polys[i], polys[j]);
+                        if (info) {
+                            polys[i] = info.info;
+                            polys.splice(j, 1);
+                            merged = true;
+                            break outer;
+                        }
+                    }
+                }
+            }
+        }
+        return polys;
+    }
+    /**
+     * [新增] 获取合并信息，包含合并后的多边形和公共边长度
+     * @param {{x:number,y:number,z:number,regionId:number}[]} a
+     * @param {{x:number,y:number,z:number,regionId:number}[]} b
+     */
+    getMergeInfo(a, b) {
+        let ai = -1, bi = -1;
+
+        // 寻找公共边
+        for (let i = 0; i < a.length; i++) {
+            const aNext = (i + 1) % a.length;
+            for (let j = 0; j < b.length; j++) {
+                const bNext = (j + 1) % b.length;
+                // 判断边是否重合 (a[i]->a[i+1] == b[j+1]->b[j])
+                if (posDistance3Dsqr(a[i],b[bNext])<=1&&posDistance3Dsqr(a[aNext],b[j])<=1) {
+                    ai = i;
+                    bi = j;
+                    break;
+                }
+            }
+            if (ai != -1) break;
+        }
+        //面积都是>0的，都是逆时针
+        if (ai < 0) return null;
+        //Instance.DebugLine({start:a[ai],end:b[bi],duration:60,color:{r:255,g:0,b:0}});
+        // 构建合并后的数组
+        const merged = [];
+        const nA = a.length;
+        const nB = b.length;
+        for (let i = 0; i < nA - 1; i++)
+            merged.push(a[(ai + 1 + i) % nA]);
+        for (let i = 0; i < nB - 1; i++)
+            merged.push(b[(bi + 1 + i) % nB]);
+        // [关键步骤] 移除共线点，加入后，这个点对应的角是180度，就可以去除这个点
+        //this.removeCollinearPoints(merged);
+
+        // 检查顶点数量限制
+        if (merged.length > POLY_MAX_VERTS_PER_POLY) return null;
+
+        // 检查凸性
+        if (!this.isPolyConvex(merged)) return null;
+
+        // 计算公共边长度 (用于优先权排序)
+        const v1 = a[ai];
+        const v2 = a[(ai + 1) % nA];
+        const distSq = (v1.x - v2.x) ** 2 + (v1.y - v2.y) ** 2; // 只计算XY平面距离
+
+        return {info:merged,dist:distSq};
+    }
+    /**
+     * [新增] 移除多边形中三点共线的冗余顶点
+     * @param {{x:number,y:number,z:number,regionId:number}[]} poly 
+     */
+    removeCollinearPoints(poly) {
+        for (let i = 0; i < poly.length; i++) {
+            const n = poly.length;
+            if (n <= 3) break; // 三角形不能再减了
+
+            const prev = poly[(i - 1 + n) % n];
+            const cur = poly[i];
+            const next = poly[(i + 1) % n];
+
+            // 使用面积法判断三点共线 (Area接近0)
+            // area() 已经在你的 path_const 中引入了
+            // 注意：这里需要一个极小的容差，防止浮点数误差
+            if (Math.abs(area(prev, cur, next))<=1) { 
+                poly.splice(i, 1);
+                i--; // 索引回退，检查新的组合
+                //Instance.DebugSphere({center:cur,radius:2,duration:60,color:{r:255,g:0,b:0}});
+            }
+        }
+    }
+    /**
+     * @param {{x:number,y:number,z:number,regionId:number}[]} poly
+     */
+    isPolyConvex(poly) {
+        const n = poly.length;
+        for (let i = 0; i < n; i++) {
+            if (area(poly[i],poly[(i + 1) % n],poly[(i + 2) % n]) < -1) return false;
+        }
+        return true;
+    }
+
+    /**
+     * @param {{x:number,y:number,z:number,regionId:number}[]} poly
+     */
+    addPolygon(poly) {
+        const idx = [];
+        for (const v of poly) {
+            let i = this.verts.findIndex(
+                //p=>Math.abs(p.x-v.x)<=0.5&&Math.abs(p.y-v.y)<=0.5&&Math.abs(p.z-v.z)<=0.5
+                p => p.x === v.x && p.y === v.y && p.z === v.z
+            );
+            if (i < 0) {
+                i = this.verts.length;
+                this.verts.push({ x: v.x, y: v.y, z: v.z });
+                //Instance.DebugSphere({center:{x:v.x,y:v.y,z:v.z+Math.random()*30},radius:8,duration:60,color:{r:0,g:0,b:0}});
+            }
+            idx.push(i);
+        }
+        this.polys.push(idx);
+        this.regions.push(poly[0].regionId);
+        this.neighbors.push(new Array(idx.length).fill(-1));
+    }
+
+    buildAdjacency() {
+        /** edgeKey → {poly, edge} */
+        const edgeMap = new Map();
+
+        for (let pi = 0; pi < this.polys.length; pi++) {
+            const poly = this.polys[pi];
+            for (let ei = 0; ei < poly.length; ei++) {
+                const a = poly[ei];
+                const b = poly[(ei + 1) % poly.length];
+
+                // 无向边：小索引在前
+                const k = a < b ? `${a},${b}` : `${b},${a}`;
+
+                if (!edgeMap.has(k)) {
+                    edgeMap.set(k, { poly: pi, edge: ei });
+                } else {
+                    const other = edgeMap.get(k);
+                    this.neighbors[pi][ei] = other.poly;
+                    this.neighbors[other.poly][other.edge] = pi;
+                }
+            }
+        }
+    }
+    debugDrawPolys(duration = 5) {
+        for (let pi = 0; pi < this.polys.length; pi++) {
+            const poly = this.polys[pi];
+            //const color = getRandomColor();
+            const color={r:255,g:255,b:0};
+            const z = Math.random() * 40*0;
+            for (let i = 0; i < poly.length; i++) {
+                const start = posZfly(this.verts[poly[i]], z);
+                const end = posZfly(this.verts[poly[(i + 1) % poly.length]], z);
+                Instance.DebugLine({ start, end, color, duration });
+                //Instance.DebugSphere({center:start,radius:6,color,duration});
+            }
+        }
+    }
+    debugDrawAdjacency(duration = 15) {
+        for (let i = 0; i < this.polys.length; i++) {
+            const start = this.polyCenter(i);
+            for (let e = 0; e < this.neighbors[i].length; e++) {
+                const ni = this.neighbors[i][e];
+                if (ni < 0) continue;
+                // 只画一次，避免双向重复
+                if (ni < i) continue;
+                const end = this.polyCenter(ni);
+                Instance.DebugLine({ start, end, color: { r: 255, g: 0, b: 255 }, duration });
+            }
+        }
+    }
+    /**
+     * @param {number} pi
+     */
+    polyCenter(pi) {
+        const poly = this.polys[pi];
+        let x = 0, y = 0, z = 0;
+
+        for (const vi of poly) {
+            const v = this.verts[vi];
+            x += v.x;
+            y += v.y;
+            z += v.z;
+        }
+
+        const n = poly.length;
+        return { x: x / n, y: y / n, z: z / n };
+    }
+    debugDrawSharedEdges(duration = 15) {
+        for (let i = 0; i < this.polys.length; i++) {
+            const polyA = this.polys[i];
+            for (let ei = 0; ei < polyA.length; ei++) {
+                const ni = this.neighbors[i][ei];
+                if (ni < 0) continue;
+                // 只画一次
+                if (ni < i) continue;
+                const start = posZfly(this.verts[polyA[ei]], 20);
+                const end = posZfly(this.verts[polyA[(ei + 1) % polyA.length]], 20);
+                Instance.DebugLine({ start, end, color: { r: 0, g: 255, b: 0 }, duration });
+            }
+        }
+    }
+}
+
+class PolyMeshDetailBuilder {
+    /**
+     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][],regions:number[],neighbors:number[][]}} mesh
+     * @param {OpenHeightfield} hf
+     */
+    constructor(mesh, hf) {
+        this.mesh = mesh;
+        /**@type {OpenHeightfield} */
+        this.hf = hf;
+        /**@type {import("cs_script/point_script").Vector[]}*/
+        this.verts = [];
+        /**@type {number[][]}*/
+        this.tris = [];
+        /**@type {number[][]}*/
+        this.meshes = [];
+        /**@type {number[]} */
+        this.triTopoly=[];
+    }
+
+    init() {
+        for (let pi = 0; pi < this.mesh.polys.length; pi++) {
+            this.buildPoly(pi);
+        }
+
+        return {
+            verts: this.verts,
+            tris: this.tris,
+            meshes: this.meshes,
+            triTopoly:this.triTopoly
+        };
+    }
+    debugDrawPolys(duration = 5) {
+        for (let pi = 0; pi < this.tris.length; pi++) {
+            const tri = this.tris[pi];
+            const color = { r: 255 * Math.random(), g: 255 * Math.random(), b: 255 * Math.random() };
+            Instance.DebugLine({ start:this.verts[tri[0]], end:this.verts[tri[1]], color, duration });
+            Instance.DebugLine({ start:this.verts[tri[1]], end:this.verts[tri[2]], color, duration });
+            Instance.DebugLine({ start:this.verts[tri[2]], end:this.verts[tri[0]], color, duration });
+        }
+    }
+    /**
+     * @param {number} pi
+     */
+    buildPoly(pi) {
+        const poly = this.mesh.polys[pi];
+        const regionid=this.mesh.regions[pi];
+        const polyVerts = this.getPolyVerts(this.mesh, poly);
+        //待更新：生成内部采样点时高度用三角剖分后的高度
+
+        // 1. 为多边形边界顶点采样高度
+        const borderVerts = this.applyHeights(polyVerts, this.hf,regionid);
+        // 2. 计算边界平均高度和高度范围
+        const borderHeightInfo = this.calculateBorderHeightInfo(borderVerts);
+        // 3. 获取初始三角剖分（用于高度差异检查）
+        const initialVertices = [...borderVerts];
+        const initialConstraints = [];
+        for (let i = 0; i < borderVerts.length; i++) {
+            const j = (i + 1) % borderVerts.length;
+            initialConstraints.push([i, j]);
+        }
+        // 4. 执行初始剖分（基于边界点）
+        const trianglesCDT = new SimplifiedCDT(initialVertices, initialConstraints);
+        let triangles = trianglesCDT.getTri();
+        // 5. 生成内部包括边界采样点
+        let rawSamples = this.buildDetailSamples(polyVerts, borderHeightInfo, this.hf,triangles,trianglesCDT.vertices,regionid);
+        // 6. 过滤内部采样点：只保留高度差异大的点
+        while(rawSamples.length>0)
+        {
+            let insert=false;
+            let heightDiff = 0;
+            let heightid = -1;
+            triangles = trianglesCDT.getTri();
+            let toRemoveIndices = [];
+            for (let i=0;i<rawSamples.length;i++) {
+                const sample=rawSamples[i];
+                let diff=0;
+                // 找到包含采样点的三角形
+                for (const tri of triangles) {
+                    if (tri.containsPoint(sample, trianglesCDT.vertices)) {
+                        const interpolatedHeight = tri.interpolateHeight(sample.x, sample.y, trianglesCDT.vertices);
+                        diff = Math.abs(sample.z - interpolatedHeight);
+                        if(this.isNearTriangleEdge(sample,tri,trianglesCDT.vertices)) diff = 0;
+                        break;
+                    }
+                }
+                // 只有当高度差异超过阈值时才保留
+                if(diff<=POLY_DETAIL_HEIGHT_ERROR)toRemoveIndices.push(i);
+                else if (diff > heightDiff) {
+                    heightDiff=diff;
+                    heightid=i;
+                    insert=true;
+                }
+            }
+            if(insert)trianglesCDT.insertPointSimplified(rawSamples[heightid]);
+            else break;
+            for (let i = toRemoveIndices.length - 1; i >= 0; i--) {
+                rawSamples.splice(toRemoveIndices[i], 1);
+            }
+        }
+        // 7. 添加到全局列表
+        const baseVert = this.verts.length;
+        const baseTri = this.tris.length;
+        const allVerts=trianglesCDT.vertices;
+        for (const v of allVerts) {
+            this.verts.push(v);
+        }
+        triangles = trianglesCDT.getTri();
+
+        for (const tri of triangles) {
+            this.tris.push([
+                baseVert + tri.a,
+                baseVert + tri.b,
+                baseVert + tri.c
+            ]);
+            this.triTopoly.push(pi);
+        }
+
+        this.meshes.push([
+            baseVert,
+            allVerts.length,
+            baseTri,
+            triangles.length
+        ]);
+    }
+    /**
+     * 计算边界顶点的高度信息
+     * @param {import("cs_script/point_script").Vector[]} borderVerts
+     * @returns {{avgHeight: number, minHeight: number, maxHeight: number, heightRange: number}}
+     */
+    calculateBorderHeightInfo(borderVerts) {
+        let sumHeight = 0;
+        let minHeight = Infinity;
+        let maxHeight = -Infinity;
+
+        for (const v of borderVerts) {
+            sumHeight += v.z;
+            minHeight = Math.min(minHeight, v.z);
+            maxHeight = Math.max(maxHeight, v.z);
+        }
+
+        const avgHeight = sumHeight / borderVerts.length;
+        const heightRange = maxHeight - minHeight;
+
+        return {
+            avgHeight,
+            minHeight,
+            maxHeight,
+            heightRange
+        };
+    }
+    /**
+     * @param {{ verts: import("cs_script/point_script").Vector[]; polys?: number[][]; regions?: number[]; neighbors?: number[][]; }} mesh
+     * @param {number[]} poly
+     */
+    getPolyVerts(mesh, poly) {
+        return poly.map(vi => mesh.verts[vi]);
+    }
+    /**
+     * 生成内部采样点（带高度误差检查）
+     * @param {import("cs_script/point_script").Vector[]} polyVerts
+     * @param {{avgHeight: number;minHeight: number;maxHeight: number;heightRange: number;}} heightInfo
+     * @param {OpenHeightfield} hf
+     * @returns {import("cs_script/point_script").Vector[]}
+     * @param {Triangle[]} initialTriangles
+     * @param {import("cs_script/point_script").Vector[]} initialVertices
+     * @param {number} regionid
+     */
+    buildDetailSamples(polyVerts, heightInfo, hf,initialTriangles,initialVertices,regionid) {
+        const samples = [];
+        // 2. AABB
+        let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+        for (const v of polyVerts) {
+            minx = Math.min(minx, v.x);
+            miny = Math.min(miny, v.y);
+            maxx = Math.max(maxx, v.x);
+            maxy = Math.max(maxy, v.y);
+        }
+
+        const step = POLY_DETAIL_SAMPLE_DIST * MESH_CELL_SIZE_XY;
+        for (let x = minx + step / 2; x <= maxx; x += step) {
+            for (let y = miny + step / 2; y <= maxy; y += step) {
+                if (this.pointInPoly2D(x, y, polyVerts)) {
+                    // 采样高度
+                    let triheight=heightInfo.avgHeight;
+
+                    // 计算与边界平均高度的差值
+                    //const heightDiff = Math.abs(height - heightInfo.avgHeight);
+                    for (const tri of initialTriangles) {
+                        if (tri.containsPoint({x, y,z:heightInfo.avgHeight},initialVertices)) {
+                            // 使用三角形插值计算高度
+                            triheight = tri.interpolateHeight(x, y, initialVertices);
+                            break;
+                        }
+                    }
+                    const height=this.sampleHeight(hf, x, y, triheight??heightInfo.avgHeight,regionid);
+                    // 检查是否超过阈值
+                    if(Math.abs(height - triheight)>POLY_DETAIL_HEIGHT_ERROR) {
+                        samples.push({ x: x, y: y, z: height });
+                    }
+                }
+            }
+        }
+        return samples;
+    }
+    /**
+     * @param {import("cs_script/point_script").Vector} sample
+     * @param {Triangle} tri
+     * @param {import("cs_script/point_script").Vector[]} verts
+     */
+    isNearTriangleEdge(sample, tri, verts) {
+
+        const dis = Math.min(distPtSegSq(sample,verts[tri.a],verts[tri.b]),distPtSegSq(sample,verts[tri.b],verts[tri.c]),distPtSegSq(sample,verts[tri.c],verts[tri.a]));
+        if (dis < POLY_DETAIL_SAMPLE_DIST * 0.5) return true;
+        return false;
+    }
+    /**
+     * @param {import("cs_script/point_script").Vector[]} polyVerts
+     * @param {OpenHeightfield} hf
+     * @param {number} regionid
+     */
+    applyHeights(polyVerts, hf,regionid) {
+        const resultVerts = [];
+        const n = polyVerts.length;
+        const step = POLY_DETAIL_SAMPLE_DIST * MESH_CELL_SIZE_XY;
+        for (let i = 0; i < n; i++) {
+            const a = polyVerts[i];
+            const b = polyVerts[(i + 1) % n];
+            // 对当前顶点采样高度
+            const az = this.sampleHeight(hf, a.x, a.y, a.z,regionid);
+            const bz = this.sampleHeight(hf, b.x, b.y, b.z, regionid);
+            const A = { x: a.x, y: a.y, z: az };
+            const B = { x: b.x, y: b.y, z: bz };
+            // 添加当前顶点（起始点）
+            resultVerts.push(A);
+
+            // 细分当前边
+            const samples = this.sampleEdgeWithHeightCheck(
+                A, 
+                B, 
+                hf,
+                step
+            );
+            // 递归插点
+            this.subdivideEdgeByHeight(
+                A,
+                B,
+                samples,
+                hf,
+                regionid,
+                resultVerts
+            );
+        }
+        
+        return resultVerts;
+    }
+    /**
+     * 在 [start, end] 之间递归插入高度偏差最大的点
+     * @param {import("cs_script/point_script").Vector} start
+     * @param {import("cs_script/point_script").Vector} end
+     * @param {import("cs_script/point_script").Vector[]} samples // 该边上的细分点（不含 start/end）
+     * @param {OpenHeightfield} hf
+     * @param {number} regionid
+     * @param {import("cs_script/point_script").Vector[]} outVerts
+     */
+    subdivideEdgeByHeight(start, end,samples,hf,regionid,outVerts) {
+        let maxError = 0;
+        let maxIndex = -1;
+        let maxVert = null;
+
+        const total = samples.length;
+
+        for (let i = 0; i < total; i++) {
+            const s = samples[i];
+            const t = (i + 1) / (total + 1);
+
+            // 如果不加该点时的插值高度
+            const interpZ = start.z * (1 - t) + end.z * t;
+
+            const h = this.sampleHeight(hf, s.x, s.y, interpZ, regionid);
+            const err = Math.abs(h - interpZ);
+
+            if (err > maxError) {
+                maxError = err;
+                maxIndex = i;
+                maxVert = { x: s.x, y: s.y, z: h };
+            }
+        }
+
+        // 没有需要加的点
+        if (maxError <= POLY_DETAIL_HEIGHT_ERROR || maxIndex === -1||!maxVert) {
+            return;
+        }
+
+        // 递归左半
+        this.subdivideEdgeByHeight(
+            start,
+            maxVert,
+            samples.slice(0, maxIndex),
+            hf,
+            regionid,
+            outVerts
+        );
+
+        // 插入当前最大误差点（顺序保证）
+        outVerts.push(maxVert);
+
+        // 递归右半
+        this.subdivideEdgeByHeight(
+            maxVert,
+            end,
+            samples.slice(maxIndex + 1),
+            hf,
+            regionid,
+            outVerts
+        );
+    }
+    /**
+     * 在边上采样并检查高度误差
+     * @param {import("cs_script/point_script").Vector} start
+     * @param {import("cs_script/point_script").Vector} end
+     * @param {OpenHeightfield} hf
+     * @param {number} sampleDist
+     * @returns {import("cs_script/point_script").Vector[]}
+     */
+    sampleEdgeWithHeightCheck(start, end, hf, sampleDist) {
+        const samples = [];
+        
+        // 计算边向量和长度
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        
+        if (length <= 1e-6) {
+            return []; // 边长度为0，不采样
+        }
+        
+        // 计算方向向量
+        const dirX = dx / length;
+        const dirY = dy / length;
+        // 计算采样点数（不包括起点和终点）
+        const numSamples = Math.floor(length / sampleDist);
+        
+        // 记录上一个采样点的高度
+
+        for (let i = 1; i <= numSamples; i++) {
+            const t = i / (numSamples + 1); // 确保不采样到端点
+            const x = start.x + dirX * length * t;
+            const y = start.y + dirY * length * t;
+            const z = start.z * (1 - t) + end.z * t;
+            samples.push({ x, y, z });
+        }
+        
+        return samples;
+    }
+    /**
+     * @param {OpenHeightfield} hf
+     * @param {number} wx
+     * @param {number} wy
+     * @param {number} fallbackZ
+     * @param {number} regionid
+     */
+    sampleHeight(hf, wx, wy, fallbackZ,regionid) {
+        const ix = Math.floor((wx - origin.x) / MESH_CELL_SIZE_XY);
+        const iy = Math.floor((wy - origin.y) / MESH_CELL_SIZE_XY);
+
+        if (ix < 0 || iy < 0 || ix >= hf.gridX || iy >= hf.gridY) return fallbackZ;
+
+        let best = null;
+        let bestDiff = Infinity;
+        /**@type {OpenSpan|null} */
+        let span = hf.cells[ix][iy];
+        while (span) {
+            if(span.regionId==regionid)
+            {
+                const z = origin.z + span.floor * MESH_CELL_SIZE_Z;
+                const d = Math.abs(z - fallbackZ);
+                if (d < bestDiff) {
+                    bestDiff = d;
+                    best = z;
+                }
+            }
+            span = span.next;
+        }
+        // 如果没有找到合适的span，开始螺旋式搜索
+        if (best === null) {
+            const maxRadius = Math.max(hf.gridX, hf.gridY); // 搜索的最大半径
+            let radius = 1; // 初始半径
+            out:
+            while (radius <= maxRadius) {
+                // 螺旋式外扩，检查四个方向
+                for (let offset = 0; offset <= radius; offset++) {
+                    // 检查 (ix + offset, iy + radius) 或 (ix + radius, iy + offset) 等位置
+                    let candidates = [
+                        [ix + offset, iy + radius], // 上
+                        [ix + radius, iy + offset], // 右
+                        [ix - offset, iy - radius], // 下
+                        [ix - radius, iy - offset]  // 左
+                    ];
+
+                    for (const [nx, ny] of candidates) {
+                        if (nx >= 0 && ny >= 0 && nx < hf.gridX && ny < hf.gridY) {
+                            // 在有效范围内，查找对应的span
+                            span = hf.cells[nx][ny];
+                            while (span) {
+                                if(span.regionId==regionid)
+                                {
+                                    const z = origin.z + span.floor * MESH_CELL_SIZE_Z;
+                                    const d = Math.abs(z - fallbackZ);
+                                    if (d < bestDiff) {
+                                        bestDiff = d;
+                                        best = z;
+                                        break out;
+                                    }
+                                }
+                                span = span.next;
+                            }
+                        }
+                    }
+                }
+                // 增大半径，继续螺旋扩展
+                radius++;
+            }
+        }
+
+        // 如果最终没有找到合适的span，返回默认的fallbackZ
+        return best ?? fallbackZ;
+    }
+    /**
+     * 判断点是否在多边形内（不含边界）
+     * 使用 odd-even rule（射线法）
+     *
+     * @param {number} px
+     * @param {number} py
+     * @param {{x:number,y:number}[]} poly
+     * @returns {boolean}
+     */
+    pointInPoly2D(px, py, poly) {
+        let inside = false;
+        const n = poly.length;
+
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+            const xi = poly[i].x, yi = poly[i].y;
+            const xj = poly[j].x, yj = poly[j].y;
+
+            // ===== 点在边上（直接算 outside）=====
+            if (this.pointOnSegment2D(px, py, xi, yi, xj, yj)) {
+                return false;
+            }
+
+            // ===== 射线法 =====
+            const intersect =
+                ((yi > py) !== (yj > py)) &&
+                (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi);
+
+            if (intersect) inside = !inside;
+        }
+
+        return inside;
+    }
+
+    /**
+     * 点是否在线段上（含端点）
+     * @param {number} px
+     * @param {number} py
+     * @param {number} x1
+     * @param {number} y1
+     * @param {number} x2
+     * @param {number} y2
+     */
+    pointOnSegment2D(px, py, x1, y1, x2, y2) {
+        // 共线
+        const cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
+        if (Math.abs(cross) > 1e-6) return false;
+
+        // 在线段范围内
+        const dot =
+            (px - x1) * (px - x2) +
+            (py - y1) * (py - y2);
+
+        return dot <= 0;
+    }
+}
+
+/**
+ * 简化的约束Delaunay三角剖分器（针对凸多边形优化）
+ */
+class SimplifiedCDT {
+    /**
+     * @param {import("cs_script/point_script").Vector[]} vertices 顶点列表
+     * @param {number[][]} constraints 约束边列表
+     */
+    constructor(vertices, constraints) {
+        this.vertices = vertices;
+        this.constraints = constraints;
+        /** @type {Triangle[]} */
+        this.triangles = [];
+        
+        // 构建约束边的查找集
+        this.constraintEdges = new Set();
+        for (const [a, b] of constraints) {
+            // 确保边是规范化的（小索引在前）
+            const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+            this.constraintEdges.add(key);
+        }
+        //初始剖分：耳割法
+        this.earClipping(vertices);
+    }
+
+    /**
+     * @returns {Triangle[]} 三角形顶点索引列表
+     */
+    getTri() {
+        return this.triangles;
+    }
+    /**
+     * @param {{x:number,y:number,z:number}[]} poly
+     */
+    earClipping(poly) {
+        const verts = Array.from({ length: poly.length }, (_, i) => i);
+        let guard = 0;
+        while (verts.length > 3 && guard++ < 5000) {
+            let bestEar=null;
+            let minPerimeter=Infinity;
+            let bestIndex=-1;
+
+            for (let i = 0; i < verts.length; i++) {
+                const prev = poly[verts[(i - 1 + verts.length) % verts.length]];
+                const cur = poly[verts[i]];
+                const next = poly[verts[(i + 1) % verts.length]];
+                //cur对应的角度是否<180度
+                if (!isConvex(prev, cur, next)) continue;
+                //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
+                let contains = false;
+                for (let j = 0; j < verts.length; j++) {
+                    if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                    if (pointInTri(poly[verts[j]], prev, cur, next)) {
+                        contains = true;
+                        break;
+                    }
+                }
+                if (contains) continue;
+                // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
+                for (let j = 0; j < verts.length; j++) {
+                    if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
+                    if (distPtSegSq(poly[verts[j]], prev, next) == 0) //判断点p是否在ab线段上
+                    {
+                        if (posDistance2Dsqr(prev, poly[verts[j]]) == 0 || posDistance2Dsqr(next, poly[verts[j]]) == 0) continue;
+                        contains = true;
+                        break;
+                    }
+                }
+                if (contains) continue;
+                const perimeter = 
+                Math.sqrt(posDistance2Dsqr(prev, cur)) +
+                Math.sqrt(posDistance2Dsqr(cur, next)) +
+                Math.sqrt(posDistance2Dsqr(next, prev));
+            
+                // 找到周长最短的耳朵
+                if (perimeter < minPerimeter) {
+                    minPerimeter = perimeter;
+                    bestEar = {p:verts[(i - 1 + verts.length) % verts.length], c:verts[i], n:verts[(i + 1) % verts.length]};
+                    bestIndex = i;
+                }
+            }
+            // 如果找到了最佳耳朵，割掉它
+            if (bestEar && bestIndex !== -1) {
+                this.triangles.push(new Triangle(bestEar.p, bestEar.c, bestEar.n));
+                verts.splice(bestIndex, 1);
+            } else {
+                // 找不到耳朵，退出循环
+                break;
+            }
+        }
+        if (verts.length == 3) {
+            this.triangles.push(new Triangle(verts[0], verts[1], verts[2]));
+        }else Instance.Msg("细节多边形耳割法错误!");
+    }
+    /**
+     * 简化的点插入方法（你的版本，稍作优化）
+     * @param {import("cs_script/point_script").Vector} point
+     */
+    insertPointSimplified(point) {
+
+        const pointIndex = this.vertices.length;
+        this.vertices.push(point);
+        const p=this.vertices[pointIndex];
+        let targetIdx = -1;
+
+        // 找到包含点的三角形
+        for (let i = 0; i < this.triangles.length; i++) {
+            if (this.triangles[i].containsPoint(p, this.vertices)) {
+                targetIdx = i;
+                break;
+            }
+        }
+        
+        if (targetIdx === -1) {
+            // 点不在任何三角形内（可能在边上），尝试找到包含点的边
+            this.handlePointOnEdge(pointIndex);
+            //Instance.Msg("点在边上");
+            return;
+        }
+
+        const t = this.triangles[targetIdx];
+
+        this.triangles.splice(targetIdx, 1);
+
+        // 分裂为三个新三角形
+        const t1 = new Triangle(t.a, t.b, pointIndex);
+        const t2 = new Triangle(t.b, t.c, pointIndex);
+        const t3 = new Triangle(t.c, t.a, pointIndex);
+        
+        this.triangles.push(t1, t2, t3);
+
+        // 只对这三条边进行局部优化，而不是全图扫描
+        this.legalizeEdge(pointIndex, t.a, t.b);
+        this.legalizeEdge(pointIndex, t.b, t.c);
+        this.legalizeEdge(pointIndex, t.c, t.a);
+    }
+    /**
+     * 处理点在边上的情况
+     * @param {number} pointIndex 
+     */
+    handlePointOnEdge(pointIndex) {
+        const p = this.vertices[pointIndex];
+        // 首先检查是否在约束边上
+        for (const [a, b] of this.constraints) {
+            if (this.pointOnSegment(p, this.vertices[a], this.vertices[b])) {
+                Instance.Msg("点在约束边上");
+                return;
+            }
+        }
+        // 查找包含该点的边
+        for (let i = 0; i < this.triangles.length; i++) {
+            const tri = this.triangles[i];
+            const edges = tri.edges();
+            
+            for (const [a, b] of edges) {
+                if (this.isConstraintEdge(a, b)) continue;
+                if (this.pointOnSegment(p, this.vertices[a], this.vertices[b])) {
+                    // 找到共享这条边的另一个三角形
+                    const otherTri = this.findAdjacentTriangleByEdge([a, b], tri);
+                    
+                    if (otherTri) {
+
+                        // 移除两个共享这条边的三角形
+                        this.triangles.splice(this.triangles.indexOf(tri), 1);
+                        this.triangles.splice(this.triangles.indexOf(otherTri), 1);
+                        
+                        // 获取两个三角形中不在这条边上的顶点
+                        const c = tri.oppositeVertex(a, b);
+                        const d = otherTri.oppositeVertex(a, b);
+                        
+                        // 创建四个新三角形
+                        const t1=new Triangle(a, pointIndex, c);
+                        const t2=new Triangle(pointIndex, b, c);
+                        const t3=new Triangle(a, d, pointIndex);
+                        const t4=new Triangle(pointIndex, d, b);
+
+                        this.triangles.push(t1,t2,t3,t4);
+
+                        // 优化新产生的边
+                        this.legalizeEdge(pointIndex, a, c);
+                        this.legalizeEdge(pointIndex, b, c);
+                        this.legalizeEdge(pointIndex, a, d);
+                        this.legalizeEdge(pointIndex, b, d);
+                        
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    /**
+     * 判断点是否在线段上
+     * @param {{ x: any; y: any;}} p
+     * @param {{ x: any; y: any;}} a
+     * @param {{ x: any; y: any;}} b
+     */
+    pointOnSegment(p, a, b) {
+        const cross = (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
+        if (Math.abs(cross) > 1e-6) return false;
+        
+        const dot = (p.x - a.x) * (p.x - b.x) + (p.y - a.y) * (p.y - b.y);
+        return dot <= 1e-6;
+    }
+
+    /**
+     * 局部递归优化 (Standard Delaunay Legalization)
+     * @param {number} pIdx 新插入的点
+     * @param {number} v1 边的一个端点
+     * @param {number} v2 边的另一个端点
+     */
+    legalizeEdge(pIdx, v1, v2) {
+        // 检查是否是约束边，约束边不可翻转
+        if (this.isConstraintEdge(v1, v2)) {
+            return;
+        }
+        
+        const edge = [v1, v2];
+        const triangleWithP = this.findTriangleByVerts(v1, v2, pIdx);
+        if (!triangleWithP) return;
+        
+        const t2 = this.findAdjacentTriangleByEdge(edge, triangleWithP);
+        if (!t2) return;
+
+        const otherVert = t2.oppositeVertex(v1, v2);
+        
+        // 检查 Delaunay 条件
+        if (this.inCircumcircle(
+            this.vertices[v1], 
+            this.vertices[v2], 
+            this.vertices[pIdx], 
+            this.vertices[otherVert]
+        )) {
+            // 翻转边
+            this.removeTriangle(t2);
+            this.removeTriangle(triangleWithP);
+
+            // 创建两个新三角形
+            const tt1=new Triangle(v1, otherVert, pIdx);
+            const tt2=new Triangle(v2, otherVert, pIdx);
+
+            this.triangles.push(tt1,tt2);
+
+            // 递归优化新产生的两条外边
+            this.legalizeEdge(pIdx, v1, otherVert);
+            this.legalizeEdge(pIdx, v2, otherVert);
+        }
+    }
+    
+    /**
+     * 检查是否是约束边
+     * @param {number} a
+     * @param {number} b
+     */
+    isConstraintEdge(a, b) {
+        const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+        return this.constraintEdges.has(key);
+    }
+
+    /**
+     * 通过三个顶点找到三角形
+     * @param {number} a
+     * @param {number} b
+     * @param {number} c
+     */
+    findTriangleByVerts(a, b, c) {
+        for (const tri of this.triangles) {
+            if ((tri.a === a && tri.b === b && tri.c === c) ||
+                (tri.a === a && tri.b === c && tri.c === b) ||
+                (tri.a === b && tri.b === a && tri.c === c) ||
+                (tri.a === b && tri.b === c && tri.c === a) ||
+                (tri.a === c && tri.b === a && tri.c === b) ||
+                (tri.a === c && tri.b === b && tri.c === a)) {
+                return tri;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 通过共享边找到相邻三角形
+     * @param {number[]} edge
+     * @param {Triangle} excludeTriangle
+     */
+    findAdjacentTriangleByEdge(edge, excludeTriangle) {
+        const [a, b] = edge;
+        
+        for (const tri of this.triangles) {
+            if (tri === excludeTriangle) continue;
+            
+            if ((tri.a === a && tri.b === b) ||
+                (tri.a === b && tri.b === a) ||
+                (tri.a === a && tri.c === b) ||
+                (tri.a === b && tri.c === a) ||
+                (tri.b === a && tri.c === b) ||
+                (tri.b === b && tri.c === a)) {
+                return tri;
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 移除三角形
+     * @param {Triangle} triangle
+     */
+    removeTriangle(triangle) {
+        const index = this.triangles.indexOf(triangle);
+        if (index !== -1) {
+            this.triangles.splice(index, 1);
+        }
+    }
+
+    /**
+     * 检查点是否在三角形的外接圆内
+     * @param {{ x: any; y: any;}} a
+     * @param {{ x: any; y: any;}} b
+     * @param {{ x: any; y: any;}} c
+     * @param {{ x: any; y: any;}} d
+     */
+    inCircumcircle(a, b, c, d) {
+        const orient =
+        (b.x - a.x) * (c.y - a.y) -
+        (b.y - a.y) * (c.x - a.x);
+        const ax = a.x, ay = a.y;
+        const bx = b.x, by = b.y;
+        const cx = c.x, cy = c.y;
+        const dx = d.x, dy = d.y;
+        
+        const adx = ax - dx;
+        const ady = ay - dy;
+        const bdx = bx - dx;
+        const bdy = by - dy;
+        const cdx = cx - dx;
+        const cdy = cy - dy;
+        
+        const abdet = adx * bdy - bdx * ady;
+        const bcdet = bdx * cdy - cdx * bdy;
+        const cadet = cdx * ady - adx * cdy;
+        const alift = adx * adx + ady * ady;
+        const blift = bdx * bdx + bdy * bdy;
+        const clift = cdx * cdx + cdy * cdy;
+        
+        const det = alift * bcdet + blift * cadet + clift * abdet;
+        
+        return orient > 0 ? det > 0 : det < 0;
+    }
+}
+/**
+ * 三角形类
+ */
+class Triangle {
+    /**
+     * @param {number} a
+     * @param {number} b
+     * @param {number} c
+     */
+    constructor(a, b, c) {
+        this.a = a;
+        this.b = b;
+        this.c = c;
+    }
+
+    /**
+     * 返回三角形的三条边
+     * @returns {number[][]}
+     */
+    edges() {
+        return [
+            [this.a, this.b],
+            [this.b, this.c],
+            [this.c, this.a]
+        ];
+    }
+
+    /**
+     * 检查是否包含某条边
+     * @param {number[]} edge
+     * @returns {boolean}
+     */
+    hasEdge(edge) {
+        const [e1, e2] = edge;
+        return (this.a === e1 && this.b === e2) ||
+            (this.b === e1 && this.c === e2) ||
+            (this.c === e1 && this.a === e2) ||
+            (this.a === e2 && this.b === e1) ||
+            (this.b === e2 && this.c === e1) ||
+            (this.c === e2 && this.a === e1);
+    }
+
+    /**
+     * 检查点是否在三角形内
+     * @param {import("cs_script/point_script").Vector} point
+     * @param {import("cs_script/point_script").Vector[]} vertices
+     * @returns {boolean}
+     */
+    containsPoint(point, vertices) {
+        const va = vertices[this.a];
+        const vb = vertices[this.b];
+        const vc = vertices[this.c];
+
+        return pointInTri(point, va, vb, vc);
+    }
+
+    /**
+     * 找到边对面的顶点
+     * @param {number} v1
+     * @param {number} v2
+     * @returns {number}
+     */
+    oppositeVertex(v1, v2) {
+        if (this.a !== v1 && this.a !== v2) return this.a;
+        if (this.b !== v1 && this.b !== v2) return this.b;
+        if (this.c !== v1 && this.c !== v2) return this.c;
+        return -1;
+    }
+    /**
+     * 计算点在三角形平面上的插值高度
+     * @param {number} x 点的x坐标
+     * @param {number} y 点的y坐标
+     * @param {import("cs_script/point_script").Vector[]} vertices
+     * @returns {number} 插值高度
+     */
+    interpolateHeight(x, y, vertices) {
+        const va = vertices[this.a];
+        const vb = vertices[this.b];
+        const vc = vertices[this.c];
+        
+        // 使用重心坐标插值
+        const denom = (vb.y - vc.y) * (va.x - vc.x) + (vc.x - vb.x) * (va.y - vc.y);
+        
+        if (Math.abs(denom) < 1e-6) {
+            // 三角形退化，返回三个顶点高度的平均值
+            return (va.z + vb.z + vc.z) / 3;
+        }
+        
+        const u = ((vb.y - vc.y) * (x - vc.x) + (vc.x - vb.x) * (y - vc.y)) / denom;
+        const v = ((vc.y - va.y) * (x - vc.x) + (va.x - vc.x) * (y - vc.y)) / denom;
+        const w = 1 - u - v;
+        
+        // 插值高度
+        return u * va.z + v * vb.z + w * vc.z;
+    }
+}
+
+class JumpLinkBuilder
 {
-    constructor()
+    /**
+     * @param {{ verts: import("cs_script/point_script").Vector[]; polys: number[][]; regions: number[]; neighbors: number[][]; }} polyMesh
+     */
+    constructor(polyMesh) {
+        this.mesh = polyMesh;
+        this.jumpDist = MESH_CELL_SIZE_XY*6;
+        this.jumpHeight = MAX_JUMP_HEIGHT*MESH_CELL_SIZE_Z;
+        this.walkHeight = MAX_WALK_HEIGHT*MESH_CELL_SIZE_Z;
+        this.linkdist=250;//可行走区域A和可行走区域B之间的每个跳点的最小距离
+        /**@type {{ PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number;type: number; }[]}*/
+        this.links = [];
+        //存储每个多边形所属的连通区域 ID
+        /**@type {number[] | Int32Array<ArrayBuffer>}*/
+        this.islandIds=[];
+    }
+    /**
+     * 收集所有的边界边
+     */
+    collectBoundaryEdges() {
+        const edges = [];
+        const { polys, verts, neighbors } = this.mesh;
+
+        for (let i = 0; i < polys.length; i++) {
+            const poly = polys[i];
+            for (let j = 0; j < poly.length; j++) {
+                // 如果没有邻居，就是边界边
+                if (neighbors[i][j] < 0) {
+                    const v1 = verts[poly[j]];
+                    const v2 = verts[poly[(j + 1) % poly.length]];
+                    edges.push({
+                        polyIndex: i,
+                        p1: v1,
+                        p2: v2
+                    });
+                    //Instance.DebugLine({start:v1,end:v2,duration:60,color:{r:255,g:0,b:0}});
+                }
+            }
+        }
+        return edges;
+    }
+    /**
+     * 判断两个多边形是否已经是物理邻居
+     * @param {number} idxA
+     * @param {number} idxB
+     */
+    areNeighbors(idxA, idxB) {
+        const nList = this.mesh.neighbors[idxA];
+        return nList.includes(idxB);
+    }
+    /**
+     * @param {import("cs_script/point_script").Vector} p1
+     * @param {import("cs_script/point_script").Vector} p2
+     * @param {import("cs_script/point_script").Vector} p3
+     * @param {import("cs_script/point_script").Vector} p4
+     */
+    closestPtSegmentSegment(p1, p2, p3, p4) {
+        // 算法来源：Real-Time Collision Detection (Graham Walsh)
+        // 计算线段 S1(p1, p2) 和 S2(p3, p4) 之间的最近点
+        
+        const d1 = { x: p2.x - p1.x, y: p2.y - p1.y}; // 忽略 Z 轴分量参与距离计算
+        const d2 = { x: p4.x - p3.x, y: p4.y - p3.y};
+        const r = { x: p1.x - p3.x, y: p1.y - p3.y};
+
+        const a = d1.x * d1.x + d1.y * d1.y; // Squared length of segment S1
+        const e = d2.x * d2.x + d2.y * d2.y; // Squared length of segment S2
+        const f = d2.x * r.x + d2.y * r.y;
+
+        const EPSILON = 1e-6;
+
+        // 检查线段是否退化成点
+        if (a <= EPSILON && e <= EPSILON) {
+            // 两个都是点
+            return { distSq: posDistance2Dsqr(p1, p3), ptA: p1, ptB: p3 };
+        }
+        
+        let s, t;
+        if (a <= EPSILON) {
+            // S1 是点
+            s = 0.0;
+            t = f / e;
+            t = Math.max(0.0, Math.min(1.0, t));
+        } else {
+            const c = d1.x * r.x + d1.y * r.y;
+            if (e <= EPSILON) {
+                // S2 是点
+                t = 0.0;
+                s = Math.max(0.0, Math.min(1.0, -c / a));
+            } else {
+                // 常规情况：两条线段
+                const b = d1.x * d2.x + d1.y * d2.y;
+                const denom = a * e - b * b;
+
+                if (denom !== 0.0) {
+                    s = Math.max(0.0, Math.min(1.0, (b * f - c * e) / denom));
+                } else {
+                    // 平行
+                    s = 0.0;
+                }
+
+                t = (b * s + f) / e;
+
+                if (t < 0.0) {
+                    t = 0.0;
+                    s = Math.max(0.0, Math.min(1.0, -c / a));
+                } else if (t > 1.0) {
+                    t = 1.0;
+                    s = Math.max(0.0, Math.min(1.0, (b - c) / a));
+                }
+            }
+        }
+
+        // 计算最近点坐标 (包含 Z)
+        // 注意：这里的 t 和 s 是在 XY 平面上算出来的比例
+        // 我们将其应用到 3D 坐标上，得到线段上的实际 3D 点
+        const ptA = {
+            x: p1.x + (p2.x - p1.x) * s,
+            y: p1.y + (p2.y - p1.y) * s,
+            z: p1.z + (p2.z - p1.z) * s
+        };
+
+        const ptB = {
+            x: p3.x + (p4.x - p3.x) * t,
+            y: p3.y + (p4.y - p3.y) * t,
+            z: p3.z + (p4.z - p3.z) * t
+        };
+
+        return {
+            distSq: posDistance2Dsqr(ptA, ptB),
+            ptA,
+            ptB
+        };
+    }
+
+    init() {
+        this.buildConnectivity();
+        const boundaryEdges = this.collectBoundaryEdges();
+        // Key: "polyA_polyB", Value: { targetPoly, dist, startPos, endPos }
+        const bestJumpPerPoly = new Map();
+
+        for (let i = 0; i < boundaryEdges.length; i++) {
+            for (let j = i + 1; j < boundaryEdges.length; j++) {
+                const edgeA = boundaryEdges[i];
+                const edgeB = boundaryEdges[j];
+
+                // 1. 排除同一个多边形的边
+                if (edgeA.polyIndex === edgeB.polyIndex) continue;
+                // B. [核心需求] 如果已经在同一个连通区域（能走过去），排除
+                //if (this.islandIds[edgeA.polyIndex] === this.islandIds[edgeB.polyIndex])continue; 
+                // 2. 排除已经是邻居的多边形 (可选，看你是否想要捷径)
+                //if (this.areNeighbors(edgeA.polyIndex, edgeB.polyIndex)) continue;
+
+                // 3. 计算两条线段在 XY 平面上的最近距离
+                // 我们主要关心水平距离是否足够近
+                const closestResult = this.closestPtSegmentSegment(
+                    edgeA.p1, edgeA.p2, 
+                    edgeB.p1, edgeB.p2
+                );
+
+                // 如果计算失败（平行重叠等极端情况），跳过
+                if (!closestResult) continue;
+
+                const { distSq, ptA, ptB } = closestResult;
+                // 5. 距离判断
+                if (distSq > this.jumpDist * this.jumpDist) continue;
+
+                //如果a和b在同一个可行走区域，并且没有跳跃的捷径，就跳过
+                if(this.islandIds[edgeA.polyIndex] === this.islandIds[edgeB.polyIndex]&&Math.abs(ptA.z-ptB.z)<=this.walkHeight)continue;
+                // 4. 高度判断 (Z轴)
+                const heightDiff = Math.abs(ptA.z - ptB.z);
+                if (heightDiff > this.jumpHeight) continue;
+                //同一点跳过
+                if (heightDiff <1&&distSq < 1) continue;
+                //Instance.DebugLine({start:ptA,end:ptB,duration:60,color:{r:255,g:0,b:0}});
+                // 6. 记录候选
+                this.updateBestCandidate(bestJumpPerPoly, edgeA.polyIndex, edgeB.polyIndex, distSq, ptA, ptB);
+            }
+        }
+        // 3. 根据 linkdist 过滤掉靠得太近的跳点
+        // 我们需要按距离从短到长排序，优先保留质量最高的跳点
+        const sortedCandidates = Array.from(bestJumpPerPoly.values()).sort((a, b) => a.distSq - b.distSq);
+        
+        const finalLinks = [];
+
+        for (const cand of sortedCandidates) {
+            const islandA = this.islandIds[cand.startPoly];
+            const islandB = this.islandIds[cand.endPoly];
+
+            // 检查在这两个区域(Island)之间，是否已经存在位置太近的跳点
+            let tooClose = false;
+            for (const existing of finalLinks) {
+                const exIslandA = this.islandIds[existing.PolyA];
+                const exIslandB = this.islandIds[existing.PolyB];
+
+                // 如果这两个跳点连接的是相同的两个岛屿
+                if ((islandA === exIslandA && islandB === exIslandB) || 
+                    (islandA === exIslandB && islandB === exIslandA)) {
+                    
+                    // 检查起点或终点的欧几里得距离是否小于 linkdist
+                    const dSqStart = posDistance3Dsqr(cand.startPos, existing.PosA);
+                    const dSqEnd = posDistance3Dsqr(cand.endPos, existing.PosB);
+
+                    if (dSqStart < this.linkdist * this.linkdist || dSqEnd < this.linkdist * this.linkdist) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!tooClose) {
+                finalLinks.push({
+                    PolyA: cand.startPoly,
+                    PolyB: cand.endPoly,
+                    PosA: cand.startPos,
+                    PosB: cand.endPos,
+                    cost: Math.sqrt(cand.distSq) * 1.5,
+                    type: (Math.abs(cand.startPos.z-cand.endPos.z)<=this.walkHeight?0:1)
+                });
+            }
+        }
+
+        this.links = finalLinks;
+        return this.links;
+    }
+    /**
+     * 计算多边形网格的连通分量
+     * 给互相连接的多边形打上相同的标识符码
+     */
+    buildConnectivity() {
+        const numPolys = this.mesh.polys.length;
+        this.islandIds = new Int32Array(numPolys).fill(-1);
+        let currentId = 0;
+
+        for (let i = 0; i < numPolys; i++) {
+            if (this.islandIds[i] !== -1) continue;
+
+            currentId++;
+            const stack = [i];
+            this.islandIds[i] = currentId;
+
+            while (stack.length > 0) {
+                const u = stack.pop();
+                //遍历该多边形的所有邻居
+                if(!u)break;
+                const neighbors = this.mesh.neighbors[u];
+                for (let v of neighbors) {
+                    //v是邻居多边形的索引。如果是负数表示边界，跳过
+                    if (v >= 0 && this.islandIds[v] === -1) {
+                        this.islandIds[v] = currentId;
+                        stack.push(v);
+                    }
+                }
+            }
+        }
+        Instance.Msg(`共有${currentId}个独立行走区域`);
+    }
+    /**
+     * @param {Map<string,any>} map
+     * @param {number} idxA
+     * @param {number} idxB
+     * @param {number} distSq 两个多边形边界边之间的最短平方距离
+     * @param {import("cs_script/point_script").Vector} ptA
+     * @param {import("cs_script/point_script").Vector} ptB
+     */
+    updateBestCandidate(map, idxA, idxB, distSq, ptA, ptB) {
+        //检查是否已经记录过这个多边形的跳跃目标
+        const id1 = Math.min(idxA, idxB);
+        const id2 = Math.max(idxA, idxB);
+        const key = `${id1}_${id2}`;
+
+        const existing = map.get(key);
+        //如果还没有记录，或者发现了一个更近的目标（distSq 更小）
+        if (!existing || distSq < existing.distSq) {
+            map.set(key, {
+                startPoly: idxA,
+                endPoly: idxB,
+                distSq: distSq,
+                startPos: { ...ptA },
+                endPos: { ...ptB }
+            });
+        }
+    }
+    debugDraw(duration = 10) {
+        for (const link of this.links) {
+            Instance.DebugLine({
+                start: link.PosA,
+                end: link.PosB,
+                color: { r: 0, g: (link.type==1?255:0), b: 255 },
+                duration
+            });
+            //Instance.DebugSphere({ center: link.PosA, radius: 4, color: { r: 0, g: 255, b: 0 }, duration });
+            //Instance.DebugSphere({ center: link.endPos, radius: 4, color: { r: 255, g: 0, b: 0 }, duration });
+            let poly = this.mesh.polys[link.PolyB];
+            for (let i = 0; i < poly.length; i++) {
+                const start = this.mesh.verts[poly[i]];
+                const end = this.mesh.verts[poly[(i + 1) % poly.length]];
+                Instance.DebugLine({start,end,color:{ r: 255, g: 0, b: 255 },duration});
+                //Instance.DebugSphere({center:start,radius:6,color,duration});
+            }
+            poly = this.mesh.polys[link.PolyA];
+            for (let i = 0; i < poly.length; i++) {
+                const start = this.mesh.verts[poly[i]];
+                const end = this.mesh.verts[poly[(i + 1) % poly.length]];
+                Instance.DebugLine({start,end,color:{ r: 255, g: 0, b: 255 },duration});
+                //Instance.DebugSphere({center:start,radius:6,color,duration});
+            }
+        }
+    }
+}
+
+class FunnelHeightFixer {
+    /**
+     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][]}} navMesh
+     * @param {{verts:{x:number,y:number,z:number}[], tris:number[][],meshes:number[][], triTopoly:number[]}} detailMesh
+     * @param {number} stepSize
+     */
+    constructor(navMesh, detailMesh, stepSize = 0.5) {
+        this.navMesh = navMesh;
+        this.detailMesh = detailMesh;
+        this.stepSize = stepSize;
+        const polyCount = detailMesh.meshes.length;
+        this.polyTriStart = new Uint16Array(polyCount);
+        this.polyTriEnd   = new Uint16Array(polyCount);
+        this.polyHasDetail = new Uint8Array(polyCount);
+        for (let i = 0; i < polyCount; i++) {
+            const mesh = detailMesh.meshes[i];
+            const baseTri  = mesh[2];
+            const triCount = mesh[3];
+            this.polyHasDetail[i] = (triCount > 0)?1:0;
+            this.polyTriStart[i] = baseTri;
+            this.polyTriEnd[i]   = baseTri + triCount; // [start, end)
+        }
+        this.triAabbMinX = [];
+        this.triAabbMinY = [];
+        this.triAabbMaxX = [];
+        this.triAabbMaxY = [];
+        const { verts, tris } = detailMesh;
+
+        for (let i = 0; i < tris.length; i++) {
+            const [ia, ib, ic] = tris[i];
+            const a = verts[ia];
+            const b = verts[ib];
+            const c = verts[ic];
+
+            const minX = Math.min(a.x, b.x, c.x);
+            const minY = Math.min(a.y, b.y, c.y);
+            const maxX = Math.max(a.x, b.x, c.x);
+            const maxY = Math.max(a.y, b.y, c.y);
+
+            this.triAabbMinX[i] = minX;
+            this.triAabbMinY[i] = minY;
+            this.triAabbMaxX[i] = maxX;
+            this.triAabbMaxY[i] = maxY;
+        }
+
+    }
+
+    /* ===============================
+       Public API
+    =============================== */
+
+    /**
+     * @param {{ x: number; y: number; z: any; }} pos
+     * @param {number} polyid
+     * @param {{ id: number; mode: number; }[]} polyPath
+     * @param {{ pos: { x: number; y: number; z: number; }; mode: number; }[]} out
+     */
+    addpoint(pos,polyid,polyPath,out)
     {
-        this.Data = ""+`{"mesh":{"verts":[{"x":-1845,"y":-1050,"z":128},{"x":-1820,"y":-1040,"z":128},{"x":-1820,"y":-980,"z":129},{"x":-1860,"y":-945,"z":120},{"x":-2035,"y":-945,"z":120},{"x":-2120,"y":-1040,"z":128},{"x":-2040,"y":-860,"z":116},{"x":-2020,"y":-855,"z":115},{"x":-2020,"y":-680,"z":127},{"x":-2210,"y":-680,"z":128},{"x":-2220,"y":-825,"z":120},{"x":-2210,"y":-1040,"z":128},{"x":-2160,"y":-1040,"z":128},{"x":-2155,"y":-1050,"z":128},{"x":-2125,"y":-1050,"z":128},{"x":-2210,"y":-640,"z":128},{"x":-1780,`
-+`"y":-650,"z":129},{"x":-1800,"y":-635,"z":128},{"x":-1865,"y":-850,"z":115},{"x":-1845,"y":-870,"z":116},{"x":-1785,"y":-815,"z":116},{"x":-1805,"y":-440,"z":87},{"x":-2065,"y":-505,"z":104},{"x":-2065,"y":-435,"z":86},{"x":-1800,"y":-125,"z":9},{"x":-2065,"y":-120,"z":7},{"x":-1990,"y":1055,"z":35},{"x":-1970,"y":1055,"z":34},{"x":-1975,"y":1195,"z":32},{"x":-2050,"y":1270,"z":33},{"x":-2170,"y":1280,"z":40},{"x":-2170,"y":1265,"z":40},{"x":-2195,"y":1250,"z":38},{"x":-2195,"y":1055,"z":39},{"x`
-+`":-2170,"y":1040,"z":40},{"x":-2000,"y":1040,"z":35},{"x":-2140,"y":2095,"z":3},{"x":-2130,"y":2080,"z":2},{"x":-2035,"y":2175,"z":-1},{"x":-1970,"y":2185,"z":-2},{"x":-1850,"y":2310,"z":0},{"x":-1870,"y":2325,"z":0},{"x":-1865,"y":2460,"z":22},{"x":-1975,"y":2425,"z":15},{"x":-2130,"y":2305,"z":3},{"x":-1970,"y":2460,"z":22},{"x":-2160,"y":2420,"z":25},{"x":-2160,"y":2350,"z":11},{"x":-2130,"y":2340,"z":6},{"x":-2140,"y":2295,"z":3},{"x":-2185,"y":2295,"z":3},{"x":-2185,"y":2095,"z":4},{"x":-20`
-+`40,"y":1810,"z":32},{"x":-2030,"y":1795,"z":32},{"x":-1935,"y":1795,"z":32},{"x":-1925,"y":1810,"z":32},{"x":-1875,"y":1805,"z":0},{"x":-1875,"y":1865,"z":0},{"x":-1855,"y":1880,"z":0},{"x":-1975,"y":2005,"z":-2},{"x":-2160,"y":2005,"z":4},{"x":-2160,"y":1805,"z":3},{"x":-2160,"y":2040,"z":4},{"x":-2130,"y":2050,"z":3},{"x":-1780,"y":1880,"z":0},{"x":-1770,"y":2310,"z":1},{"x":-1770,"y":1865,"z":0},{"x":-2025,"y":2460,"z":65},{"x":-2020,"y":2500,"z":67},{"x":-2095,"y":2500,"z":67},{"x":-2090,"y"`
-+`:2460,"z":67},{"x":-2115,"y":2455,"z":62},{"x":-2115,"y":2440,"z":63},{"x":-2075,"y":2430,"z":65},{"x":-1980,"y":2435,"z":63},{"x":-1980,"y":2460,"z":65},{"x":-1975,"y":2470,"z":24},{"x":-1860,"y":2470,"z":24},{"x":-1750,"y":2465,"z":26},{"x":-1750,"y":2680,"z":32},{"x":-1795,"y":2655,"z":32},{"x":-1830,"y":2620,"z":33},{"x":-1795,"y":2675,"z":32},{"x":-1820,"y":2645,"z":33},{"x":-1850,"y":2620,"z":34},{"x":-1865,"y":2645,"z":33},{"x":-2110,"y":2645,"z":37},{"x":-2020,"y":2510,"z":31},{"x":-2110`
-+`,"y":2465,"z":33},{"x":-2095,"y":2510,"z":33},{"x":-2010,"y":2465,"z":28},{"x":-2115,"y":2695,"z":38},{"x":-1850,"y":2660,"z":34},{"x":-1935,"y":2750,"z":31},{"x":-1970,"y":2750,"z":31},{"x":-2035,"y":2820,"z":32},{"x":-2095,"y":2820,"z":33},{"x":-2095,"y":2705,"z":35},{"x":-2030,"y":2900,"z":33},{"x":-2020,"y":2885,"z":32},{"x":-1900,"y":2890,"z":32},{"x":-1905,"y":2925,"z":36},{"x":-1895,"y":2935,"z":36},{"x":-1855,"y":2925,"z":36},{"x":-1870,"y":2895,"z":35},{"x":-1740,"y":2900,"z":36},{"x":-`
-+`1800,"y":3000,"z":32},{"x":-1855,"y":2965,"z":33},{"x":-1875,"y":3000,"z":33},{"x":-1890,"y":2955,"z":38},{"x":-1905,"y":2970,"z":36},{"x":-1900,"y":3010,"z":34},{"x":-2005,"y":3010,"z":32},{"x":-2010,"y":3055,"z":33},{"x":-2105,"y":3125,"z":35},{"x":-2100,"y":2895,"z":33},{"x":-1975,"y":3065,"z":32},{"x":-1975,"y":3125,"z":33},{"x":-2090,"y":2890,"z":89},{"x":-2090,"y":2830,"z":89},{"x":-2030,"y":2830,"z":89},{"x":-2030,"y":2890,"z":89},{"x":-1780,"y":-95,"z":8},{"x":-2035,"y":-110,"z":8},{"x":`
-+`-1875,"y":0,"z":-2},{"x":-1875,"y":15,"z":-3},{"x":-2025,"y":15,"z":8},{"x":-2035,"y":10,"z":9},{"x":-2055,"y":405,"z":8},{"x":-2050,"y":210,"z":9},{"x":-1730,"y":210,"z":0},{"x":-1715,"y":425,"z":1},{"x":-1790,"y":500,"z":18},{"x":-2040,"y":460,"z":9},{"x":-1730,"y":-105,"z":20},{"x":-1710,"y":-105,"z":8},{"x":-2045,"y":505,"z":12},{"x":-2050,"y":465,"z":25},{"x":-2050,"y":460,"z":22},{"x":-2055,"y":540,"z":61},{"x":-2055,"y":515,"z":62},{"x":-1790,"y":515,"z":60},{"x":-1790,"y":540,"z":59},{"x`
-+`":-2035,"y":100,"z":8},{"x":-2025,"y":120,"z":8},{"x":-2050,"y":160,"z":9},{"x":-1790,"y":550,"z":32},{"x":-1780,"y":530,"z":32},{"x":-1545,"y":530,"z":33},{"x":-1530,"y":550,"z":32},{"x":-1320,"y":550,"z":35},{"x":-1320,"y":600,"z":38},{"x":-1405,"y":600,"z":34},{"x":-1415,"y":610,"z":35},{"x":-1420,"y":690,"z":36},{"x":-1450,"y":700,"z":33},{"x":-1605,"y":695,"z":32},{"x":-1615,"y":735,"z":32},{"x":-1720,"y":695,"z":32},{"x":-1710,"y":735,"z":31},{"x":-1795,"y":690,"z":32},{"x":-1825,"y":705,"`
-+`z":35},{"x":-1825,"y":600,"z":32},{"x":-1810,"y":555,"z":32},{"x":-1905,"y":690,"z":34},{"x":-1905,"y":610,"z":33},{"x":-1875,"y":580,"z":32},{"x":-1915,"y":600,"z":32},{"x":-2050,"y":600,"z":37},{"x":-2050,"y":550,"z":35},{"x":-2040,"y":545,"z":35},{"x":-1870,"y":550,"z":32},{"x":-1950,"y":1055,"z":34},{"x":-1940,"y":1040,"z":34},{"x":-1845,"y":1035,"z":37},{"x":-1845,"y":1140,"z":32},{"x":-1830,"y":1140,"z":32},{"x":-1830,"y":1220,"z":32},{"x":-1815,"y":1235,"z":32},{"x":-1845,"y":1255,"z":32}`
-+`,{"x":-1830,"y":1280,"z":33},{"x":-2035,"y":1285,"z":32},{"x":-2030,"y":1435,"z":32},{"x":-1805,"y":1325,"z":37},{"x":-1775,"y":1310,"z":37},{"x":-1730,"y":1315,"z":38},{"x":-1925,"y":1395,"z":32},{"x":-1715,"y":1295,"z":37},{"x":-1675,"y":1300,"z":36},{"x":-1675,"y":1400,"z":42},{"x":-1935,"y":1435,"z":32},{"x":-1835,"y":2665,"z":33},{"x":-1825,"y":2690,"z":33},{"x":-1805,"y":2690,"z":32},{"x":-1785,"y":2765,"z":33},{"x":-1795,"y":2780,"z":32},{"x":-1750,"y":2775,"z":34},{"x":-1775,"y":2810,"z"`
-+`:32},{"x":-1750,"y":2870,"z":34},{"x":-1890,"y":2870,"z":31},{"x":-1750,"y":2795,"z":33},{"x":-2020,"y":2830,"z":32},{"x":-1855,"y":-865,"z":150},{"x":-1870,"y":-860,"z":148},{"x":-2030,"y":-865,"z":158},{"x":-2030,"y":-930,"z":159},{"x":-1855,"y":-935,"z":151},{"x":-2000,"y":3055,"z":71},{"x":-2000,"y":3020,"z":70},{"x":-1930,"y":3020,"z":70},{"x":-1930,"y":3050,"z":71},{"x":-1965,"y":3055,"z":70},{"x":-1920,"y":3050,"z":106},{"x":-1920,"y":3030,"z":106},{"x":-1900,"y":3030,"z":106},{"x":-1900,`
-+`"y":3050,"z":106},{"x":-1795,"y":-1050,"z":129},{"x":-1600,"y":-1070,"z":128},{"x":-1600,"y":-815,"z":116},{"x":-1795,"y":-1070,"z":129},{"x":-1770,"y":-650,"z":129},{"x":-1845,"y":-935,"z":120},{"x":-1825,"y":550,"z":106},{"x":-1830,"y":575,"z":106},{"x":-1855,"y":565,"z":106},{"x":-1850,"y":545,"z":106},{"x":-1835,"y":545,"z":106},{"x":-1715,"y":2430,"z":65},{"x":-1720,"y":2870,"z":62},{"x":-1740,"y":2870,"z":62},{"x":-1745,"y":2835,"z":65},{"x":-1740,"y":2465,"z":65},{"x":-1750,"y":2455,"z":6`
-+`3},{"x":-1855,"y":2460,"z":64},{"x":-1855,"y":2440,"z":63},{"x":-1835,"y":2655,"z":78},{"x":-1855,"y":2640,"z":78},{"x":-1830,"y":2630,"z":78},{"x":-1850,"y":2425,"z":102},{"x":-1850,"y":2330,"z":103},{"x":-1760,"y":2330,"z":102},{"x":-1765,"y":2425,"z":102},{"x":-1840,"y":975,"z":40},{"x":-1725,"y":980,"z":34},{"x":-1730,"y":1000,"z":34},{"x":-1775,"y":1010,"z":38},{"x":-1775,"y":1050,"z":36},{"x":-1725,"y":1060,"z":32},{"x":-1715,"y":1045,"z":31},{"x":-1705,"y":1050,"z":31},{"x":-1665,"y":1090`
-+`,"z":31},{"x":-1660,"y":1270,"z":35},{"x":-1555,"y":1250,"z":36},{"x":-1570,"y":1270,"z":38},{"x":-1675,"y":1280,"z":35},{"x":-1725,"y":1250,"z":33},{"x":-1765,"y":1250,"z":33},{"x":-1780,"y":1270,"z":34},{"x":-1795,"y":1235,"z":32},{"x":-1775,"y":1305,"z":70},{"x":-1790,"y":1315,"z":70},{"x":-1805,"y":1310,"z":71},{"x":-1835,"y":1260,"z":70},{"x":-1810,"y":1240,"z":70},{"x":-1795,"y":1250,"z":70},{"x":-1775,"y":1285,"z":70},{"x":-1810,"y":2655,"z":77},{"x":-1805,"y":2680,"z":77},{"x":-1825,"y":`
-+`2680,"z":77},{"x":-1825,"y":2665,"z":77},{"x":-1420,"y":-150,"z":157},{"x":-1420,"y":-125,"z":157},{"x":-1785,"y":-130,"z":158},{"x":-1610,"y":-150,"z":157},{"x":-1790,"y":-630,"z":157},{"x":-1765,"y":-640,"z":158},{"x":-1765,"y":-315,"z":157},{"x":-1685,"y":-315,"z":164},{"x":-1685,"y":-245,"z":164},{"x":-1750,"y":-245,"z":164},{"x":-1760,"y":-260,"z":162},{"x":-1765,"y":-230,"z":164},{"x":-1695,"y":-225,"z":164},{"x":-1690,"y":-170,"z":164},{"x":-1695,"y":-160,"z":164},{"x":-1680,"y":-175,"z":`
-+`164},{"x":-1675,"y":-230,"z":164},{"x":-1610,"y":-225,"z":164},{"x":-1665,"y":-165,"z":164},{"x":-1660,"y":-155,"z":164},{"x":-1690,"y":-150,"z":158},{"x":-1690,"y":-115,"z":8},{"x":-1495,"y":-115,"z":8},{"x":-1490,"y":-105,"z":8},{"x":-1465,"y":-115,"z":26},{"x":-1465,"y":-105,"z":25},{"x":-1480,"y":-110,"z":30},{"x":-1470,"y":-90,"z":8},{"x":-1485,"y":-65,"z":8},{"x":-1460,"y":-45,"z":8},{"x":-1470,"y":-15,"z":8},{"x":-1460,"y":30,"z":8},{"x":-1535,"y":500,"z":25},{"x":-1440,"y":55,"z":8},{"x"`
-+`:-1420,"y":55,"z":8},{"x":-1380,"y":95,"z":3},{"x":-1365,"y":95,"z":8},{"x":-1325,"y":45,"z":8},{"x":-1275,"y":45,"z":8},{"x":-1255,"y":65,"z":8},{"x":-1260,"y":185,"z":10},{"x":-1320,"y":505,"z":8},{"x":-1760,"y":2795,"z":77},{"x":-1785,"y":2785,"z":77},{"x":-1760,"y":2775,"z":77},{"x":-1035,"y":-1070,"z":128},{"x":-1010,"y":-1055,"z":128},{"x":-1010,"y":-1000,"z":128},{"x":-1030,"y":-985,"z":128},{"x":-1030,"y":-970,"z":128},{"x":-1010,"y":-960,"z":128},{"x":-930,"y":-920,"z":120},{"x":-930,"y`
-+`":-715,"z":121},{"x":-970,"y":-705,"z":128},{"x":-995,"y":-980,"z":128},{"x":-970,"y":-620,"z":128},{"x":-1050,"y":-620,"z":127},{"x":-1055,"y":-425,"z":129},{"x":-1040,"y":-410,"z":129},{"x":-1080,"y":-370,"z":129},{"x":-1080,"y":-330,"z":128},{"x":-1150,"y":-265,"z":128},{"x":-1185,"y":-265,"z":128},{"x":-1190,"y":-255,"z":128},{"x":-1255,"y":-270,"z":128},{"x":-1250,"y":-255,"z":128},{"x":-1260,"y":-255,"z":155},{"x":-1295,"y":-270,"z":136},{"x":-1295,"y":-255,"z":154},{"x":-1345,"y":-265,"z"`
-+`:130},{"x":-1415,"y":-195,"z":129},{"x":-1415,"y":-160,"z":130},{"x":-1525,"y":-190,"z":130},{"x":-1540,"y":-220,"z":129},{"x":-1565,"y":-160,"z":129},{"x":-1560,"y":-175,"z":130},{"x":-1535,"y":-175,"z":130},{"x":-1555,"y":-220,"z":130},{"x":-1570,"y":-190,"z":130},{"x":-1590,"y":-195,"z":130},{"x":-1600,"y":-230,"z":129},{"x":-1605,"y":-180,"z":130},{"x":-1675,"y":-240,"z":128},{"x":-1680,"y":-325,"z":128},{"x":-1755,"y":-320,"z":129},{"x":-1755,"y":-640,"z":128},{"x":-1725,"y":1805,"z":3},{"x`
-+`":-1715,"y":1790,"z":3},{"x":-1695,"y":1805,"z":2},{"x":-1685,"y":1860,"z":0},{"x":-1660,"y":1805,"z":0},{"x":-1500,"y":1920,"z":0},{"x":-1490,"y":1885,"z":0},{"x":-1410,"y":1875,"z":4},{"x":-1525,"y":1945,"z":0},{"x":-1385,"y":1895,"z":6},{"x":-1385,"y":2085,"z":3},{"x":-1545,"y":1945,"z":-1},{"x":-1355,"y":2115,"z":2},{"x":-1295,"y":2200,"z":1},{"x":-1295,"y":2235,"z":1},{"x":-1355,"y":2095,"z":3},{"x":-1325,"y":2130,"z":3},{"x":-1280,"y":2210,"z":3},{"x":-1330,"y":2235,"z":1},{"x":-1350,"y":2`
-+`205,"z":1},{"x":-1375,"y":2215,"z":0},{"x":-1340,"y":2280,"z":1},{"x":-1355,"y":2320,"z":1},{"x":-1380,"y":2330,"z":0},{"x":-1370,"y":2360,"z":0},{"x":-1380,"y":2390,"z":2},{"x":-1355,"y":2400,"z":2},{"x":-1355,"y":2575,"z":4},{"x":-1480,"y":2580,"z":2},{"x":-1490,"y":2605,"z":3},{"x":-1555,"y":2605,"z":4},{"x":-1580,"y":2510,"z":2},{"x":-1580,"y":2580,"z":3},{"x":-1590,"y":2500,"z":2},{"x":-1670,"y":2500,"z":7},{"x":-1680,"y":2510,"z":8},{"x":-1705,"y":2430,"z":10},{"x":-1675,"y":2585,"z":6},{"`
-+`x":-1705,"y":2590,"z":7},{"x":-1745,"y":2420,"z":12},{"x":-1740,"y":2325,"z":1},{"x":-1765,"y":1805,"z":3},{"x":-1710,"y":970,"z":33},{"x":-1615,"y":970,"z":32},{"x":-1605,"y":980,"z":33},{"x":-1545,"y":975,"z":35},{"x":-1545,"y":995,"z":35},{"x":-1570,"y":1010,"z":35},{"x":-1565,"y":1050,"z":35},{"x":-1715,"y":1010,"z":32},{"x":-1560,"y":1720,"z":1},{"x":-1625,"y":1800,"z":0},{"x":-1605,"y":1760,"z":2},{"x":-1655,"y":1795,"z":0},{"x":-1710,"y":1615,"z":3},{"x":-1650,"y":1715,"z":2},{"x":-1615,"`
-+`y":1615,"z":2},{"x":-1595,"y":1655,"z":2},{"x":-1650,"y":1700,"z":2},{"x":-1710,"y":2870,"z":19},{"x":-1665,"y":2595,"z":5},{"x":-1590,"y":2595,"z":4},{"x":-1630,"y":2735,"z":9},{"x":-1490,"y":2660,"z":5},{"x":-1420,"y":2670,"z":12},{"x":-1425,"y":2725,"z":14},{"x":-1405,"y":2745,"z":16},{"x":-1500,"y":2870,"z":5},{"x":-1535,"y":2780,"z":7},{"x":-1355,"y":2745,"z":17},{"x":-1355,"y":2780,"z":15},{"x":-1560,"y":2710,"z":6},{"x":-1600,"y":2805,"z":11},{"x":-1525,"y":1055,"z":36},{"x":-1525,"y":125`
-+`0,"z":37},{"x":-1630,"y":1850,"z":34},{"x":-1635,"y":1880,"z":41},{"x":-1675,"y":1850,"z":37},{"x":-1650,"y":1805,"z":36},{"x":-1610,"y":1820,"z":39},{"x":-1605,"y":1830,"z":50},{"x":-1565,"y":1715,"z":60},{"x":-1600,"y":1750,"z":60},{"x":-1640,"y":1705,"z":60},{"x":-1605,"y":1670,"z":60},{"x":-1565,"y":1700,"z":60},{"x":-1560,"y":1860,"z":52},{"x":-1580,"y":1900,"z":52},{"x":-1630,"y":1885,"z":45},{"x":-1630,"y":1875,"z":53},{"x":-1585,"y":1850,"z":54},{"x":-1570,"y":1845,"z":45},{"x":-1610,"y"`
-+`:1835,"z":53},{"x":-1595,"y":1830,"z":45},{"x":-1545,"y":2775,"z":64},{"x":-1585,"y":2795,"z":64},{"x":-1600,"y":2795,"z":64},{"x":-1620,"y":2745,"z":64},{"x":-1580,"y":2720,"z":64},{"x":-1560,"y":2725,"z":64},{"x":-1575,"y":-185,"z":175},{"x":-1575,"y":-160,"z":174},{"x":-1590,"y":-160,"z":174},{"x":-1595,"y":-175,"z":174},{"x":-1500,"y":1885,"z":25},{"x":-1525,"y":1935,"z":26},{"x":-1545,"y":1935,"z":28},{"x":-1580,"y":1910,"z":44},{"x":-1550,"y":1855,"z":41},{"x":-1540,"y":-210,"z":175},{"x":`
-+`-1540,"y":-185,"z":175},{"x":-1555,"y":-185,"z":175},{"x":-1560,"y":-200,"z":175},{"x":-1530,"y":540,"z":61},{"x":-1535,"y":515,"z":62},{"x":-1320,"y":515,"z":58},{"x":-1320,"y":540,"z":57},{"x":-1505,"y":1040,"z":37},{"x":-1335,"y":1040,"z":38},{"x":-1325,"y":1055,"z":37},{"x":-1285,"y":1055,"z":32},{"x":-1275,"y":1040,"z":32},{"x":-1175,"y":1045,"z":-8},{"x":-1330,"y":1175,"z":33},{"x":-1375,"y":1205,"z":34},{"x":-1185,"y":1150,"z":-16},{"x":-1245,"y":1145,"z":24},{"x":-1245,"y":1155,"z":32},{`
-+`"x":-1190,"y":1155,"z":32},{"x":-1160,"y":1180,"z":32},{"x":-1205,"y":1190,"z":32},{"x":-1280,"y":1195,"z":32},{"x":-1155,"y":1275,"z":32},{"x":-1190,"y":1275,"z":32},{"x":-1195,"y":1200,"z":32},{"x":-1290,"y":1170,"z":32},{"x":-1335,"y":1200,"z":33},{"x":-1375,"y":1270,"z":36},{"x":-1505,"y":1270,"z":38},{"x":-1480,"y":2655,"z":60},{"x":-1480,"y":2625,"z":60},{"x":-1465,"y":2625,"z":60},{"x":-1460,"y":2655,"z":60},{"x":-1420,"y":2660,"z":60},{"x":-1400,"y":15,"z":64},{"x":-1405,"y":30,"z":61},{`
-+`"x":-1450,"y":30,"z":69},{"x":-1460,"y":-35,"z":69},{"x":-1440,"y":-45,"z":64},{"x":-1460,"y":-50,"z":68},{"x":-1460,"y":-80,"z":68},{"x":-1455,"y":-105,"z":69},{"x":-1420,"y":-30,"z":65},{"x":-1420,"y":-105,"z":86},{"x":-1455,"y":2645,"z":107},{"x":-1455,"y":2595,"z":107},{"x":-1355,"y":2595,"z":119},{"x":-1355,"y":2645,"z":119},{"x":-1405,"y":2650,"z":122},{"x":-1280,"y":2645,"z":119},{"x":-1280,"y":2600,"z":102},{"x":-1230,"y":2600,"z":101},{"x":-1235,"y":2710,"z":114},{"x":-1305,"y":2665,"z"`
-+`:128},{"x":-1330,"y":2665,"z":128},{"x":-1330,"y":2695,"z":128},{"x":-1355,"y":2710,"z":124},{"x":-1355,"y":2725,"z":124},{"x":-1400,"y":2720,"z":125},{"x":-1355,"y":55,"z":20},{"x":-1370,"y":75,"z":20},{"x":-1405,"y":45,"z":20},{"x":-1395,"y":25,"z":20},{"x":-1370,"y":40,"z":20},{"x":-1330,"y":1230,"z":70},{"x":-1335,"y":1270,"z":71},{"x":-1365,"y":1270,"z":71},{"x":-1365,"y":1215,"z":71},{"x":-1330,"y":1210,"z":70},{"x":-1325,"y":1185,"z":69},{"x":-1290,"y":1190,"z":70},{"x":-1285,"y":1250,"z"`
-+`:69},{"x":-1320,"y":1250,"z":70},{"x":-1310,"y":2285,"z":3},{"x":-1260,"y":2190,"z":3},{"x":-1295,"y":2125,"z":5},{"x":-1280,"y":2115,"z":7},{"x":-1280,"y":2095,"z":9},{"x":-1225,"y":2095,"z":11},{"x":-1215,"y":2065,"z":12},{"x":-1180,"y":2065,"z":8},{"x":-1170,"y":2130,"z":4},{"x":-1120,"y":2130,"z":-1},{"x":-1105,"y":2165,"z":-6},{"x":-1115,"y":2175,"z":-4},{"x":-1115,"y":2330,"z":-1},{"x":-1280,"y":2300,"z":6},{"x":-1280,"y":2330,"z":9},{"x":-1280,"y":2590,"z":68},{"x":-1070,"y":2165,"z":-16}`
-+`,{"x":-1065,"y":2155,"z":-17},{"x":-960,"y":2255,"z":-64},{"x":-955,"y":2370,"z":-52},{"x":-910,"y":2415,"z":-60},{"x":-915,"y":2425,"z":-43},{"x":-900,"y":2420,"z":-55},{"x":-875,"y":2420,"z":-56},{"x":-865,"y":2420,"z":-66},{"x":-830,"y":2420,"z":-67},{"x":-820,"y":2460,"z":-66},{"x":-820,"y":2475,"z":-66},{"x":-825,"y":2485,"z":-64},{"x":-840,"y":2495,"z":-57},{"x":-840,"y":2480,"z":-54},{"x":-850,"y":2480,"z":-41},{"x":-815,"y":2485,"z":-77},{"x":-815,"y":2525,"z":-68},{"x":-850,"y":2495,"z"`
-+`:-42},{"x":-820,"y":2555,"z":-65},{"x":-840,"y":2555,"z":-64},{"x":-840,"y":2565,"z":-77},{"x":-850,"y":2580,"z":-74},{"x":-820,"y":2565,"z":-82},{"x":-815,"y":2580,"z":-82},{"x":-865,"y":2560,"z":-64},{"x":-855,"y":2525,"z":-43},{"x":-870,"y":2530,"z":-41},{"x":-885,"y":2550,"z":-48},{"x":-905,"y":2540,"z":-43},{"x":-905,"y":2470,"z":-41},{"x":-870,"y":2550,"z":-48},{"x":-915,"y":2470,"z":-25},{"x":-920,"y":2535,"z":-25},{"x":-920,"y":2545,"z":-39},{"x":-1085,"y":2570,"z":32},{"x":-885,"y":2560`
-+`,"z":-58},{"x":-1110,"y":2585,"z":46},{"x":-1230,"y":2590,"z":65},{"x":-1110,"y":2710,"z":87},{"x":-1225,"y":2710,"z":88},{"x":-1220,"y":2600,"z":65},{"x":-1210,"y":1270,"z":104},{"x":-1225,"y":1275,"z":104},{"x":-1265,"y":1270,"z":104},{"x":-1275,"y":1240,"z":104},{"x":-1270,"y":1215,"z":104},{"x":-1215,"y":1210,"z":104},{"x":-1160,"y":1160,"z":-40},{"x":-1115,"y":1065,"z":-32},{"x":-1060,"y":1120,"z":-56},{"x":-1035,"y":1190,"z":-80},{"x":-1040,"y":1320,"z":-111},{"x":-1135,"y":1195,"z":-72},{`
-+`"x":-1010,"y":1330,"z":-111},{"x":-1010,"y":1405,"z":-113},{"x":-1030,"y":1405,"z":-113},{"x":-1065,"y":1445,"z":-112},{"x":-1200,"y":1450,"z":-110},{"x":-1200,"y":1340,"z":-107},{"x":-1130,"y":1320,"z":-111},{"x":-1065,"y":1455,"z":-76},{"x":-1060,"y":1525,"z":-76},{"x":-1125,"y":1525,"z":-76},{"x":-1130,"y":1495,"z":-76},{"x":-1140,"y":1525,"z":-77},{"x":-1185,"y":1525,"z":-77},{"x":-1200,"y":1515,"z":-77},{"x":-1200,"y":1465,"z":-77},{"x":-1160,"y":2125,"z":39},{"x":-1170,"y":2065,"z":40},{"x`
-+`":-1135,"y":2065,"z":39},{"x":-1135,"y":2125,"z":39},{"x":-970,"y":-410,"z":129},{"x":-970,"y":-285,"z":130},{"x":-995,"y":-280,"z":129},{"x":-995,"y":-235,"z":129},{"x":-970,"y":-170,"z":150},{"x":-990,"y":-170,"z":150},{"x":-985,"y":-180,"z":150},{"x":-975,"y":-195,"z":145},{"x":-970,"y":-230,"z":129},{"x":-980,"y":-210,"z":129},{"x":-1005,"y":-205,"z":128},{"x":-1005,"y":-185,"z":135},{"x":-1010,"y":-160,"z":135},{"x":-995,"y":-185,"z":145},{"x":-995,"y":-200,"z":145},{"x":-1090,"y":-170,"z":`
-+`130},{"x":-1090,"y":-210,"z":129},{"x":-1140,"y":-215,"z":128},{"x":-1135,"y":-255,"z":128},{"x":-1125,"y":2120,"z":65},{"x":-1125,"y":2065,"z":64},{"x":-1060,"y":2065,"z":64},{"x":-1060,"y":2115,"z":64},{"x":-1070,"y":2120,"z":65},{"x":-1105,"y":2155,"z":43},{"x":-1105,"y":2130,"z":43},{"x":-1075,"y":2130,"z":43},{"x":-1075,"y":2155,"z":43},{"x":-1060,"y":2590,"z":138},{"x":-1060,"y":2710,"z":139},{"x":-1095,"y":2710,"z":139},{"x":-1095,"y":2595,"z":138},{"x":-1090,"y":2585,"z":139},{"x":-905,"`
-+`y":1325,"z":-108},{"x":-900,"y":1335,"z":-109},{"x":-865,"y":1335,"z":-110},{"x":-865,"y":1390,"z":-112},{"x":-855,"y":1400,"z":-112},{"x":-780,"y":1400,"z":-112},{"x":-780,"y":1525,"z":-109},{"x":-855,"y":1515,"z":-110},{"x":-850,"y":1525,"z":-109},{"x":-1050,"y":1525,"z":-110},{"x":-1050,"y":1475,"z":-112},{"x":-875,"y":2065,"z":-84},{"x":-830,"y":2065,"z":-99},{"x":-825,"y":2405,"z":-82},{"x":-825,"y":2415,"z":-81},{"x":-1065,"y":2135,"z":-13},{"x":-1040,"y":2125,"z":-16},{"x":-1040,"y":2095,`
-+`"z":-12},{"x":-885,"y":2100,"z":-81},{"x":-975,"y":-420,"z":166},{"x":-990,"y":-415,"z":166},{"x":-1040,"y":-420,"z":165},{"x":-1045,"y":-595,"z":168},{"x":-1040,"y":-615,"z":166},{"x":-975,"y":-610,"z":168},{"x":-970,"y":-470,"z":169},{"x":-985,"y":-1055,"z":128},{"x":-975,"y":-1070,"z":128},{"x":-810,"y":-1070,"z":128},{"x":-785,"y":-1055,"z":128},{"x":-790,"y":-820,"z":116},{"x":-895,"y":-715,"z":121},{"x":-745,"y":-650,"z":130},{"x":-745,"y":-1070,"z":128},{"x":-590,"y":-1070,"z":128},{"x":-`
-+`580,"y":-1055,"z":128},{"x":-880,"y":-650,"z":130},{"x":-880,"y":-705,"z":128},{"x":-835,"y":2625,"z":-70},{"x":-835,"y":2605,"z":-76},{"x":-815,"y":2605,"z":-79},{"x":-815,"y":2625,"z":-74},{"x":-755,"y":2065,"z":-112},{"x":-740,"y":2100,"z":-114},{"x":-710,"y":2100,"z":-116},{"x":-715,"y":2300,"z":-114},{"x":-515,"y":2140,"z":-124},{"x":-515,"y":2455,"z":-89},{"x":-590,"y":2460,"z":-88},{"x":-585,"y":2095,"z":-119},{"x":-575,"y":2080,"z":-119},{"x":-605,"y":2475,"z":-86},{"x":-595,"y":2545,"z"`
-+`:-84},{"x":-605,"y":2570,"z":-84},{"x":-815,"y":2425,"z":-83},{"x":-810,"y":2555,"z":-83},{"x":-785,"y":2625,"z":-74},{"x":-790,"y":2605,"z":-79},{"x":-760,"y":2605,"z":-80},{"x":-760,"y":2625,"z":-73},{"x":-545,"y":1370,"z":-113},{"x":-505,"y":1380,"z":-112},{"x":-505,"y":1475,"z":-112},{"x":-545,"y":1485,"z":-112},{"x":-545,"y":1525,"z":-111},{"x":-770,"y":1390,"z":-112},{"x":-770,"y":1325,"z":-112},{"x":-545,"y":1325,"z":-110},{"x":-430,"y":-1065,"z":128},{"x":-430,"y":-1030,"z":128},{"x":-55`
-+`5,"y":-1025,"z":128},{"x":-550,"y":-1015,"z":127},{"x":-510,"y":-650,"z":123},{"x":-505,"y":-1015,"z":121},{"x":-410,"y":-1015,"z":104},{"x":-640,"y":500,"z":9},{"x":-655,"y":245,"z":8},{"x":-650,"y":205,"z":8},{"x":-520,"y":205,"z":6},{"x":-520,"y":385,"z":3},{"x":-625,"y":510,"z":8},{"x":-735,"y":500,"z":10},{"x":-725,"y":470,"z":24},{"x":-745,"y":455,"z":24},{"x":-745,"y":440,"z":24},{"x":-710,"y":425,"z":24},{"x":-720,"y":360,"z":9},{"x":-700,"y":265,"z":8},{"x":-685,"y":245,"z":8},{"x":-660`
-+`,"y":205,"z":56},{"x":-665,"y":240,"z":56},{"x":-680,"y":235,"z":57},{"x":-680,"y":220,"z":57},{"x":-495,"y":195,"z":-1},{"x":-495,"y":-45,"z":1},{"x":-435,"y":-45,"z":-1},{"x":-425,"y":-60,"z":-1},{"x":-395,"y":-55,"z":-1},{"x":-395,"y":230,"z":0},{"x":-320,"y":300,"z":0},{"x":-260,"y":305,"z":-1},{"x":-250,"y":295,"z":6},{"x":-255,"y":265,"z":0},{"x":-245,"y":265,"z":0},{"x":-230,"y":270,"z":6},{"x":-220,"y":305,"z":0},{"x":-190,"y":305,"z":2},{"x":-195,"y":540,"z":-1},{"x":-210,"y":550,"z":-1`
-+`},{"x":-235,"y":540,"z":-2},{"x":-250,"y":555,"z":-1},{"x":-250,"y":570,"z":0},{"x":-225,"y":585,"z":0},{"x":-230,"y":725,"z":1},{"x":-245,"y":740,"z":0},{"x":-260,"y":750,"z":0},{"x":-265,"y":775,"z":-1},{"x":-265,"y":885,"z":-24},{"x":-495,"y":720,"z":1},{"x":-495,"y":880,"z":-25},{"x":-525,"y":710,"z":8},{"x":-525,"y":645,"z":8},{"x":-535,"y":635,"z":8},{"x":-625,"y":640,"z":8},{"x":-635,"y":625,"z":8},{"x":-585,"y":1800,"z":-118},{"x":-570,"y":1780,"z":-118},{"x":-545,"y":1805,"z":-120},{"x"`
-+`:-330,"y":1805,"z":-122},{"x":-330,"y":1985,"z":-127},{"x":-310,"y":2000,"z":-127},{"x":-370,"y":2065,"z":-129},{"x":-570,"y":1930,"z":-119},{"x":-575,"y":2065,"z":-118},{"x":-610,"y":1920,"z":-118},{"x":-610,"y":1800,"z":-118},{"x":-520,"y":2545,"z":8},{"x":-545,"y":2550,"z":8},{"x":-585,"y":2550,"z":-22},{"x":-590,"y":2480,"z":-17},{"x":-525,"y":2475,"z":9},{"x":-515,"y":2530,"z":6},{"x":-330,"y":2625,"z":-84},{"x":-520,"y":2630,"z":-73},{"x":-590,"y":2630,"z":-75},{"x":-590,"y":2590,"z":-84},`
-+`{"x":-580,"y":2570,"z":-85},{"x":-530,"y":2565,"z":-87},{"x":-515,"y":2550,"z":-87},{"x":-390,"y":2545,"z":-86},{"x":-360,"y":2530,"z":-89},{"x":-325,"y":2515,"z":-92},{"x":-320,"y":2565,"z":-93},{"x":-365,"y":2515,"z":-88},{"x":-305,"y":2530,"z":-93},{"x":-305,"y":2555,"z":-93},{"x":-310,"y":2610,"z":-89},{"x":-425,"y":1605,"z":-126},{"x":-410,"y":1585,"z":-127},{"x":-395,"y":1595,"z":-127},{"x":-385,"y":1640,"z":-128},{"x":-420,"y":1660,"z":-126},{"x":-405,"y":1685,"z":-128},{"x":-335,"y":1650`
-+`,"z":-128},{"x":-330,"y":1730,"z":-122},{"x":-320,"y":1740,"z":-120},{"x":-265,"y":1740,"z":-103},{"x":-265,"y":1785,"z":-105},{"x":-310,"y":1780,"z":-116},{"x":-505,"y":1665,"z":-122},{"x":-575,"y":1665,"z":-117},{"x":-495,"y":1635,"z":-126},{"x":-160,"y":2000,"z":-126},{"x":-160,"y":2060,"z":-125},{"x":-150,"y":2070,"z":-125},{"x":-85,"y":2070,"z":-125},{"x":-90,"y":2210,"z":-128},{"x":-145,"y":2200,"z":-126},{"x":-105,"y":2225,"z":-128},{"x":-135,"y":2220,"z":-127},{"x":-220,"y":2200,"z":-126`
-+`},{"x":-230,"y":2210,"z":-126},{"x":-225,"y":2290,"z":-121},{"x":-410,"y":2195,"z":-125},{"x":-315,"y":2295,"z":-118},{"x":-465,"y":2190,"z":-125},{"x":-505,"y":895,"z":-27},{"x":-270,"y":1120,"z":-80},{"x":-500,"y":1125,"z":-81},{"x":-510,"y":1110,"z":-75},{"x":-530,"y":1110,"z":-73},{"x":-530,"y":895,"z":-26},{"x":-330,"y":2305,"z":-116},{"x":-330,"y":2435,"z":-90},{"x":-405,"y":-1055,"z":101},{"x":-340,"y":-1055,"z":86},{"x":-340,"y":-650,"z":86},{"x":-315,"y":-1055,"z":80},{"x":-490,"y":1365`
-+`,"z":-120},{"x":-475,"y":1380,"z":-126},{"x":-365,"y":1380,"z":-126},{"x":-365,"y":1480,"z":-126},{"x":-340,"y":1495,"z":-126},{"x":-265,"y":1490,"z":-125},{"x":-265,"y":1525,"z":-125},{"x":-320,"y":1525,"z":-126},{"x":-330,"y":1535,"z":-126},{"x":-490,"y":1485,"z":-120},{"x":-335,"y":1615,"z":-128},{"x":-430,"y":1570,"z":-126},{"x":-495,"y":1605,"z":-126},{"x":-500,"y":2525,"z":-20},{"x":-505,"y":2485,"z":-31},{"x":-490,"y":2485,"z":-20},{"x":-485,"y":2525,"z":-20},{"x":-335,"y":1360,"z":-126},`
-+`{"x":-265,"y":1360,"z":-123},{"x":-340,"y":-640,"z":138},{"x":-340,"y":-620,"z":140},{"x":-495,"y":-620,"z":158},{"x":-495,"y":-630,"z":158},{"x":-495,"y":-600,"z":2},{"x":-395,"y":-600,"z":1},{"x":-395,"y":-500,"z":1},{"x":-335,"y":-500,"z":0},{"x":-300,"y":-460,"z":8},{"x":-380,"y":-385,"z":1},{"x":-370,"y":-265,"z":1},{"x":-380,"y":-260,"z":1},{"x":-380,"y":-200,"z":0},{"x":-395,"y":-190,"z":0},{"x":-425,"y":-135,"z":-1},{"x":-445,"y":-155,"z":-1},{"x":-460,"y":-210,"z":0},{"x":-495,"y":-220,`
-+`"z":0},{"x":-485,"y":-155,"z":69},{"x":-495,"y":-175,"z":69},{"x":-470,"y":-175,"z":69},{"x":-455,"y":-160,"z":69},{"x":-460,"y":-150,"z":69},{"x":-455,"y":-80,"z":107},{"x":-480,"y":-70,"z":107},{"x":-495,"y":-135,"z":108},{"x":-470,"y":-145,"z":107},{"x":-455,"y":-100,"z":107},{"x":-415,"y":2465,"z":-27},{"x":-480,"y":2475,"z":-49},{"x":-430,"y":2455,"z":-33},{"x":-355,"y":2465,"z":-4},{"x":-330,"y":2455,"z":1},{"x":-330,"y":2465,"z":3},{"x":-355,"y":2475,"z":-21},{"x":-390,"y":2470,"z":-18},{`
-+`"x":-330,"y":2475,"z":-20},{"x":-330,"y":2500,"z":-18},{"x":-375,"y":2505,"z":-21},{"x":-375,"y":2475,"z":-17},{"x":-410,"y":2485,"z":1},{"x":-390,"y":2515,"z":-21},{"x":-435,"y":2475,"z":-10},{"x":-475,"y":2525,"z":1},{"x":-480,"y":2485,"z":1},{"x":-265,"y":2615,"z":25},{"x":-390,"y":2625,"z":19},{"x":-470,"y":2625,"z":19},{"x":-475,"y":2610,"z":19},{"x":-355,"y":2605,"z":27},{"x":-355,"y":2515,"z":26},{"x":-320,"y":2505,"z":26},{"x":-265,"y":2510,"z":26},{"x":5,"y":-605,"z":2},{"x":5,"y":-490,`
-+`"z":1},{"x":-65,"y":-490,"z":1},{"x":40,"y":-490,"z":2},{"x":-75,"y":-460,"z":8},{"x":-320,"y":275,"z":3},{"x":-345,"y":245,"z":1},{"x":-275,"y":260,"z":0},{"x":-285,"y":275,"z":0},{"x":-265,"y":1470,"z":-29},{"x":-275,"y":1475,"z":-29},{"x":-345,"y":1470,"z":-28},{"x":-345,"y":1390,"z":-28},{"x":-335,"y":1380,"z":-29},{"x":-265,"y":1380,"z":-29},{"x":-305,"y":-1070,"z":76},{"x":-150,"y":-920,"z":31},{"x":-145,"y":-645,"z":37},{"x":-330,"y":-620,"z":102},{"x":-330,"y":-635,"z":101},{"x":-190,"y"`
-+`:-635,"z":102},{"x":-190,"y":-620,"z":103},{"x":165,"y":-790,"z":-11},{"x":145,"y":-790,"z":-11},{"x":160,"y":-1020,"z":1},{"x":170,"y":-1015,"z":1},{"x":190,"y":-1005,"z":1},{"x":5,"y":-645,"z":5},{"x":-305,"y":-1170,"z":74},{"x":155,"y":-1155,"z":0},{"x":180,"y":-1170,"z":0},{"x":180,"y":-1160,"z":0},{"x":-230,"y":770,"z":30},{"x":-230,"y":1525,"z":30},{"x":-250,"y":1525,"z":30},{"x":-245,"y":1280,"z":32},{"x":-255,"y":1480,"z":29},{"x":-255,"y":780,"z":29},{"x":-185,"y":585,"z":0},{"x":-175,"`
-+`y":570,"z":0},{"x":-140,"y":575,"z":0},{"x":-220,"y":765,"z":0},{"x":-40,"y":1460,"z":-1},{"x":-65,"y":1340,"z":0},{"x":-40,"y":1340,"z":0},{"x":100,"y":1345,"z":0},{"x":105,"y":1525,"z":1},{"x":60,"y":1535,"z":0},{"x":-140,"y":1270,"z":0},{"x":-70,"y":1460,"z":-1},{"x":-130,"y":1525,"z":0},{"x":-220,"y":1525,"z":1},{"x":-190,"y":550,"z":44},{"x":-185,"y":575,"z":44},{"x":-235,"y":575,"z":44},{"x":-215,"y":560,"z":44},{"x":-240,"y":560,"z":44},{"x":-235,"y":550,"z":44},{"x":40,"y":305,"z":0},{"x`
-+`":75,"y":295,"z":0},{"x":-65,"y":470,"z":-1},{"x":-140,"y":545,"z":0},{"x":85,"y":465,"z":0},{"x":-175,"y":555,"z":0},{"x":-180,"y":-615,"z":61},{"x":-180,"y":-635,"z":61},{"x":5,"y":-635,"z":61},{"x":5,"y":-615,"z":61},{"x":60,"y":1590,"z":1},{"x":-115,"y":1590,"z":2},{"x":-115,"y":1535,"z":1},{"x":-60,"y":2060,"z":-125},{"x":-60,"y":2000,"z":-122},{"x":25,"y":2005,"z":-123},{"x":90,"y":2050,"z":-123},{"x":145,"y":2045,"z":-123},{"x":95,"y":2165,"z":-124},{"x":45,"y":2220,"z":-131},{"x":-40,"y"`
-+`:2295,"z":-127},{"x":145,"y":2165,"z":-124},{"x":-100,"y":2295,"z":-128},{"x":-90,"y":2235,"z":-128},{"x":105,"y":2310,"z":-31},{"x":55,"y":2365,"z":-32},{"x":40,"y":2365,"z":-30},{"x":-10,"y":2315,"z":-31},{"x":-10,"y":2290,"z":-31},{"x":35,"y":2240,"z":-31},{"x":50,"y":2240,"z":-31},{"x":105,"y":2295,"z":-31},{"x":450,"y":-1005,"z":0},{"x":445,"y":-650,"z":2},{"x":365,"y":-650,"z":3},{"x":340,"y":-620,"z":2},{"x":15,"y":-620,"z":4},{"x":355,"y":-595,"z":0},{"x":375,"y":-555,"z":1},{"x":375,"y"`
-+`:-595,"z":0},{"x":385,"y":-550,"z":0},{"x":375,"y":-380,"z":2},{"x":390,"y":-370,"z":8},{"x":360,"y":-340,"z":2},{"x":110,"y":-420,"z":2},{"x":105,"y":-335,"z":0},{"x":320,"y":-300,"z":0},{"x":110,"y":-265,"z":2},{"x":340,"y":2050,"z":-125},{"x":340,"y":2235,"z":-126},{"x":470,"y":2235,"z":-130},{"x":515,"y":2285,"z":-124},{"x":500,"y":2295,"z":-126},{"x":495,"y":2330,"z":-117},{"x":125,"y":2295,"z":-126},{"x":115,"y":2325,"z":-117},{"x":60,"y":2380,"z":-116},{"x":500,"y":2550,"z":-107},{"x":395`
-+`,"y":2540,"z":-118},{"x":385,"y":2555,"z":-117},{"x":85,"y":2400,"z":-118},{"x":210,"y":2555,"z":-118},{"x":200,"y":2540,"z":-118},{"x":180,"y":2550,"z":-117},{"x":80,"y":2550,"z":-117},{"x":145,"y":225,"z":8},{"x":205,"y":280,"z":0},{"x":220,"y":320,"z":-1},{"x":225,"y":445,"z":0},{"x":205,"y":470,"z":1},{"x":100,"y":475,"z":0},{"x":255,"y":1525,"z":2},{"x":290,"y":1360,"z":0},{"x":315,"y":1360,"z":0},{"x":310,"y":1470,"z":0},{"x":270,"y":1535,"z":2},{"x":110,"y":1330,"z":1},{"x":225,"y":1345,"`
-+`z":0},{"x":215,"y":1330,"z":1},{"x":280,"y":1345,"z":0},{"x":320,"y":-255,"z":-1},{"x":295,"y":-255,"z":0},{"x":145,"y":-255,"z":8},{"x":210,"y":-165,"z":8},{"x":130,"y":-165,"z":9},{"x":130,"y":-190,"z":9},{"x":145,"y":-200,"z":8},{"x":195,"y":15,"z":7},{"x":225,"y":-50,"z":3},{"x":615,"y":-45,"z":-2},{"x":600,"y":30,"z":-3},{"x":635,"y":50,"z":-2},{"x":680,"y":55,"z":0},{"x":755,"y":245,"z":8},{"x":660,"y":245,"z":-1},{"x":735,"y":-145,"z":1},{"x":760,"y":-140,"z":8},{"x":710,"y":275,"z":0},{"`
-+`x":640,"y":255,"z":0},{"x":660,"y":285,"z":1},{"x":720,"y":325,"z":1},{"x":345,"y":110,"z":-4},{"x":650,"y":335,"z":1},{"x":590,"y":300,"z":1},{"x":580,"y":275,"z":1},{"x":540,"y":245,"z":1},{"x":475,"y":245,"z":0},{"x":195,"y":110,"z":7},{"x":170,"y":70,"z":8},{"x":165,"y":80,"z":8},{"x":145,"y":50,"z":8},{"x":145,"y":15,"z":8},{"x":130,"y":-5,"z":9},{"x":150,"y":95,"z":8},{"x":460,"y":255,"z":0},{"x":460,"y":280,"z":1},{"x":145,"y":145,"z":8},{"x":130,"y":135,"z":9},{"x":130,"y":85,"z":9},{"x"`
-+`:135,"y":80,"z":53},{"x":135,"y":60,"z":53},{"x":155,"y":60,"z":53},{"x":150,"y":85,"z":53},{"x":145,"y":-95,"z":44},{"x":140,"y":-160,"z":44},{"x":210,"y":-155,"z":44},{"x":205,"y":-90,"z":44},{"x":205,"y":-65,"z":79},{"x":190,"y":-5,"z":79},{"x":145,"y":-20,"z":79},{"x":145,"y":-60,"z":79},{"x":155,"y":-85,"z":79},{"x":165,"y":-1150,"z":40},{"x":175,"y":-1150,"z":40},{"x":180,"y":-1025,"z":40},{"x":470,"y":310,"z":6},{"x":470,"y":470,"z":2},{"x":250,"y":455,"z":0},{"x":250,"y":470,"z":0},{"x":`
-+`555,"y":-370,"z":8},{"x":595,"y":-360,"z":7},{"x":605,"y":-230,"z":-2},{"x":565,"y":-385,"z":8},{"x":665,"y":-170,"z":-2},{"x":645,"y":-145,"z":-2},{"x":220,"y":-150,"z":8},{"x":210,"y":-80,"z":7},{"x":230,"y":-70,"z":5},{"x":420,"y":1360,"z":0},{"x":420,"y":1430,"z":0},{"x":500,"y":1445,"z":0},{"x":505,"y":1635,"z":1},{"x":495,"y":1760,"z":5},{"x":420,"y":1650,"z":3},{"x":425,"y":1755,"z":4},{"x":410,"y":1650,"z":19},{"x":405,"y":1650,"z":21},{"x":405,"y":1640,"z":3},{"x":390,"y":1640,"z":3},{"`
-+`x":390,"y":1650,"z":20},{"x":270,"y":1655,"z":10},{"x":265,"y":1895,"z":98},{"x":405,"y":1765,"z":99},{"x":415,"y":1775,"z":102},{"x":500,"y":1775,"z":102},{"x":505,"y":1850,"z":97},{"x":500,"y":1960,"z":96},{"x":305,"y":1910,"z":97},{"x":425,"y":2040,"z":96},{"x":435,"y":2045,"z":96},{"x":405,"y":2080,"z":96},{"x":425,"y":1965,"z":96},{"x":300,"y":2080,"z":97},{"x":290,"y":2105,"z":98},{"x":500,"y":2045,"z":96},{"x":520,"y":2065,"z":96},{"x":515,"y":2430,"z":96},{"x":505,"y":2460,"z":96},{"x":2`
-+`65,"y":2460,"z":98},{"x":525,"y":2435,"z":96},{"x":265,"y":2105,"z":98},{"x":265,"y":2535,"z":98},{"x":595,"y":2435,"z":97},{"x":595,"y":2495,"z":96},{"x":290,"y":2535,"z":98},{"x":715,"y":2435,"z":97},{"x":560,"y":2535,"z":96},{"x":545,"y":2535,"z":96},{"x":530,"y":2550,"z":96},{"x":530,"y":2575,"z":96},{"x":505,"y":2590,"z":96},{"x":540,"y":2630,"z":95},{"x":555,"y":2610,"z":95},{"x":580,"y":2630,"z":95},{"x":590,"y":2700,"z":97},{"x":520,"y":2630,"z":95},{"x":575,"y":2710,"z":97},{"x":505,"y"`
-+`:2615,"z":96},{"x":575,"y":2775,"z":97},{"x":405,"y":2755,"z":97},{"x":380,"y":2775,"z":98},{"x":410,"y":2725,"z":97},{"x":395,"y":2710,"z":96},{"x":370,"y":2715,"z":104},{"x":360,"y":2700,"z":104},{"x":305,"y":2695,"z":97},{"x":305,"y":2560,"z":97},{"x":370,"y":2755,"z":138},{"x":370,"y":2775,"z":138},{"x":310,"y":2765,"z":138},{"x":310,"y":2755,"z":138},{"x":270,"y":2775,"z":138},{"x":270,"y":2755,"z":138},{"x":300,"y":2705,"z":138},{"x":360,"y":2710,"z":130},{"x":365,"y":2725,"z":131},{"x":39`
-+`0,"y":2720,"z":138},{"x":400,"y":2730,"z":138},{"x":395,"y":2750,"z":138},{"x":520,"y":2070,"z":-120},{"x":800,"y":2065,"z":-48},{"x":800,"y":2200,"z":-48},{"x":715,"y":2290,"z":-62},{"x":500,"y":2045,"z":-124},{"x":370,"y":-640,"z":48},{"x":375,"y":-605,"z":49},{"x":355,"y":-605,"z":48},{"x":350,"y":-625,"z":48},{"x":435,"y":2035,"z":132},{"x":435,"y":1970,"z":132},{"x":500,"y":1970,"z":132},{"x":500,"y":2035,"z":132},{"x":650,"y":785,"z":1},{"x":630,"y":770,"z":1},{"x":660,"y":730,"z":1},{"x":`
-+`725,"y":780,"z":4},{"x":710,"y":800,"z":0},{"x":690,"y":800,"z":0},{"x":690,"y":935,"z":0},{"x":725,"y":1080,"z":0},{"x":720,"y":935,"z":0},{"x":885,"y":1080,"z":1},{"x":710,"y":1090,"z":1},{"x":705,"y":1210,"z":2},{"x":525,"y":1170,"z":3},{"x":530,"y":1070,"z":2},{"x":525,"y":1040,"z":2},{"x":510,"y":1030,"z":1},{"x":635,"y":805,"z":0},{"x":510,"y":795,"z":2},{"x":540,"y":795,"z":3},{"x":575,"y":770,"z":1},{"x":545,"y":2590,"z":131},{"x":540,"y":2620,"z":131},{"x":520,"y":2620,"z":131},{"x":515`
-+`,"y":2595,"z":131},{"x":525,"y":2585,"z":131},{"x":1275,"y":2310,"z":125},{"x":1285,"y":2720,"z":124},{"x":1260,"y":2720,"z":125},{"x":1265,"y":2480,"z":126},{"x":1255,"y":2330,"z":125},{"x":1055,"y":2330,"z":125},{"x":1030,"y":2310,"z":125},{"x":795,"y":2425,"z":125},{"x":790,"y":2460,"z":138},{"x":760,"y":2450,"z":137},{"x":770,"y":2435,"z":138},{"x":750,"y":2430,"z":136},{"x":735,"y":2425,"z":127},{"x":750,"y":2440,"z":138},{"x":730,"y":2460,"z":138},{"x":725,"y":2435,"z":138},{"x":525,"y":24`
-+`25,"z":125},{"x":520,"y":2065,"z":124},{"x":545,"y":2065,"z":125},{"x":540,"y":2400,"z":126},{"x":550,"y":2410,"z":126},{"x":575,"y":2410,"z":126},{"x":1050,"y":2425,"z":125},{"x":560,"y":2400,"z":124},{"x":1020,"y":2410,"z":127},{"x":1030,"y":2400,"z":125},{"x":635,"y":355,"z":1},{"x":760,"y":340,"z":0},{"x":760,"y":435,"z":0},{"x":750,"y":440,"z":0},{"x":760,"y":465,"z":0},{"x":760,"y":575,"z":0},{"x":750,"y":585,"z":0},{"x":690,"y":575,"z":1},{"x":680,"y":605,"z":1},{"x":645,"y":615,"z":1},{"`
-+`x":645,"y":700,"z":1},{"x":635,"y":715,"z":1},{"x":585,"y":745,"z":1},{"x":570,"y":715,"z":1},{"x":525,"y":705,"z":1},{"x":535,"y":605,"z":1},{"x":525,"y":610,"z":1},{"x":525,"y":575,"z":1},{"x":535,"y":460,"z":1},{"x":525,"y":465,"z":1},{"x":525,"y":340,"z":2},{"x":575,"y":320,"z":1},{"x":570,"y":2555,"z":138},{"x":555,"y":2580,"z":137},{"x":540,"y":2575,"z":137},{"x":540,"y":2555,"z":138},{"x":550,"y":2545,"z":137},{"x":625,"y":2365,"z":65},{"x":625,"y":2395,"z":65},{"x":560,"y":2390,"z":65},{`
-+`"x":555,"y":2370,"z":65},{"x":565,"y":2355,"z":65},{"x":580,"y":2550,"z":96},{"x":710,"y":2450,"z":97},{"x":725,"y":2470,"z":96},{"x":760,"y":2460,"z":96},{"x":785,"y":2475,"z":96},{"x":800,"y":2460,"z":96},{"x":835,"y":2490,"z":95},{"x":840,"y":2690,"z":96},{"x":815,"y":2710,"z":96},{"x":850,"y":2750,"z":96},{"x":840,"y":2775,"z":100},{"x":740,"y":2700,"z":96},{"x":750,"y":2775,"z":98},{"x":750,"y":2710,"z":96},{"x":580,"y":2575,"z":96},{"x":555,"y":2590,"z":96},{"x":770,"y":-355,"z":8},{"x":74`
-+`5,"y":-330,"z":8},{"x":565,"y":-400,"z":8},{"x":585,"y":-410,"z":8},{"x":700,"y":-410,"z":8},{"x":720,"y":-400,"z":8},{"x":710,"y":-345,"z":7},{"x":735,"y":-355,"z":8},{"x":725,"y":-360,"z":8},{"x":725,"y":-315,"z":7},{"x":565,"y":2325,"z":-28},{"x":565,"y":2305,"z":-28},{"x":635,"y":2305,"z":-12},{"x":635,"y":2325,"z":-12},{"x":605,"y":2330,"z":-20},{"x":605,"y":2355,"z":28},{"x":605,"y":2335,"z":28},{"x":635,"y":2335,"z":28},{"x":635,"y":2360,"z":28},{"x":695,"y":-10,"z":37},{"x":675,"y":45,"z`
-+`":33},{"x":610,"y":25,"z":33},{"x":660,"y":-160,"z":35},{"x":690,"y":-35,"z":59},{"x":715,"y":-150,"z":35},{"x":725,"y":-145,"z":35},{"x":720,"y":-105,"z":37},{"x":710,"y":-70,"z":41},{"x":700,"y":-70,"z":58},{"x":705,"y":-45,"z":37},{"x":645,"y":2325,"z":-43},{"x":645,"y":2300,"z":-43},{"x":710,"y":2300,"z":-29},{"x":710,"y":2325,"z":-29},{"x":645,"y":2390,"z":-1},{"x":645,"y":2335,"z":-1},{"x":710,"y":2335,"z":5},{"x":705,"y":2390,"z":4},{"x":745,"y":795,"z":3},{"x":810,"y":795,"z":0},{"x":805`
-+`,"y":810,"z":0},{"x":820,"y":830,"z":0},{"x":840,"y":830,"z":0},{"x":850,"y":815,"z":0},{"x":880,"y":840,"z":0},{"x":730,"y":2710,"z":170},{"x":730,"y":2775,"z":170},{"x":705,"y":2775,"z":170},{"x":705,"y":2765,"z":170},{"x":710,"y":2710,"z":170},{"x":900,"y":2065,"z":-31},{"x":910,"y":2030,"z":-23},{"x":960,"y":2030,"z":-12},{"x":960,"y":2180,"z":-8},{"x":975,"y":2180,"z":-5},{"x":975,"y":2240,"z":2},{"x":1030,"y":2295,"z":19},{"x":1015,"y":2305,"z":19},{"x":1015,"y":2390,"z":23},{"x":760,"y":2`
-+`390,"z":-42},{"x":765,"y":2365,"z":-43},{"x":725,"y":2350,"z":-54},{"x":725,"y":2295,"z":-58},{"x":715,"y":2390,"z":22},{"x":715,"y":2365,"z":22},{"x":745,"y":2370,"z":25},{"x":745,"y":2390,"z":25},{"x":730,"y":1205,"z":115},{"x":725,"y":1130,"z":123},{"x":730,"y":1100,"z":116},{"x":745,"y":1110,"z":118},{"x":750,"y":1190,"z":117},{"x":890,"y":1100,"z":115},{"x":835,"y":1145,"z":132},{"x":830,"y":1105,"z":118},{"x":890,"y":1205,"z":115},{"x":825,"y":1190,"z":123},{"x":825,"y":1180,"z":137},{"x":`
-+`825,"y":1145,"z":140},{"x":755,"y":1180,"z":145},{"x":755,"y":1115,"z":150},{"x":825,"y":1115,"z":142},{"x":1015,"y":2580,"z":96},{"x":1080,"y":2570,"z":96},{"x":1080,"y":2720,"z":95},{"x":1025,"y":2775,"z":100},{"x":885,"y":2775,"z":101},{"x":880,"y":2750,"z":97},{"x":885,"y":2725,"z":97},{"x":905,"y":2710,"z":97},{"x":900,"y":2690,"z":96},{"x":870,"y":2685,"z":96},{"x":860,"y":2705,"z":96},{"x":805,"y":2435,"z":97},{"x":995,"y":2500,"z":96},{"x":1005,"y":2505,"z":96},{"x":995,"y":2435,"z":96},`
-+`{"x":840,"y":795,"z":46},{"x":840,"y":820,"z":46},{"x":815,"y":810,"z":46},{"x":820,"y":795,"z":46},{"x":855,"y":2710,"z":118},{"x":845,"y":2730,"z":120},{"x":825,"y":2715,"z":120},{"x":845,"y":2700,"z":118},{"x":900,"y":785,"z":1},{"x":975,"y":705,"z":8},{"x":990,"y":720,"z":7},{"x":1240,"y":720,"z":8},{"x":1240,"y":775,"z":8},{"x":1260,"y":800,"z":0},{"x":1250,"y":1205,"z":0},{"x":1210,"y":1205,"z":0},{"x":1205,"y":1215,"z":0},{"x":1165,"y":1205,"z":0},{"x":980,"y":1140,"z":1},{"x":910,"y":109`
-+`0,"z":1},{"x":1170,"y":1215,"z":0},{"x":990,"y":1215,"z":0},{"x":980,"y":1205,"z":0},{"x":910,"y":1135,"z":1},{"x":840,"y":785,"z":0},{"x":875,"y":2775,"z":142},{"x":850,"y":2775,"z":141},{"x":860,"y":2755,"z":142},{"x":875,"y":2725,"z":141},{"x":850,"y":2735,"z":142},{"x":870,"y":2720,"z":140},{"x":870,"y":2695,"z":141},{"x":895,"y":2700,"z":141},{"x":910,"y":1205,"z":36},{"x":910,"y":1145,"z":36},{"x":970,"y":1145,"z":36},{"x":970,"y":1205,"z":36},{"x":1240,"y":205,"z":10},{"x":975,"y":610,"z"`
-+`:9},{"x":960,"y":600,"z":10},{"x":960,"y":205,"z":12},{"x":1255,"y":2030,"z":2},{"x":1255,"y":2295,"z":13},{"x":1085,"y":2560,"z":152},{"x":1045,"y":2570,"z":152},{"x":1025,"y":2570,"z":152},{"x":1010,"y":2520,"z":152},{"x":1070,"y":2505,"z":152},{"x":1015,"y":2490,"z":168},{"x":1015,"y":2435,"z":168},{"x":1065,"y":2440,"z":169},{"x":1065,"y":2495,"z":168},{"x":1095,"y":2560,"z":96},{"x":1190,"y":2560,"z":96},{"x":1250,"y":2560,"z":99},{"x":1250,"y":2795,"z":116},{"x":1260,"y":2790,"z":125},{"x"`
-+`:1300,"y":2820,"z":122},{"x":1280,"y":2835,"z":125},{"x":1280,"y":2850,"z":126},{"x":1300,"y":2865,"z":126},{"x":1270,"y":2900,"z":128},{"x":1040,"y":2905,"z":128},{"x":1040,"y":2785,"z":108},{"x":1045,"y":2945,"z":129},{"x":1330,"y":2855,"z":116},{"x":1355,"y":2870,"z":117},{"x":1370,"y":2850,"z":115},{"x":1385,"y":2865,"z":116},{"x":1575,"y":2865,"z":124},{"x":1570,"y":2975,"z":128},{"x":1595,"y":2985,"z":133},{"x":1595,"y":3010,"z":133},{"x":1570,"y":3020,"z":127},{"x":1575,"y":3070,"z":127},`
-+`{"x":1045,"y":3020,"z":129},{"x":1030,"y":3005,"z":129},{"x":1030,"y":2960,"z":129},{"x":1040,"y":3070,"z":130},{"x":1180,"y":2550,"z":96},{"x":1080,"y":2515,"z":96},{"x":1085,"y":2430,"z":96},{"x":1060,"y":2420,"z":97},{"x":1060,"y":2340,"z":99},{"x":1180,"y":2480,"z":95},{"x":1250,"y":2340,"z":100},{"x":1250,"y":2470,"z":97},{"x":1190,"y":2470,"z":96},{"x":1200,"y":2540,"z":170},{"x":1200,"y":2490,"z":170},{"x":1255,"y":2490,"z":170},{"x":1255,"y":2540,"z":170},{"x":1245,"y":1550,"z":0},{"x":1`
-+`265,"y":1535,"z":1},{"x":1605,"y":1540,"z":0},{"x":1610,"y":1675,"z":0},{"x":1250,"y":1595,"z":1},{"x":1250,"y":1675,"z":0},{"x":1250,"y":1635,"z":1},{"x":1235,"y":1625,"z":1},{"x":1235,"y":1605,"z":1},{"x":1235,"y":1690,"z":0},{"x":1640,"y":1705,"z":1},{"x":1665,"y":1755,"z":1},{"x":1660,"y":1780,"z":0},{"x":1685,"y":1805,"z":0},{"x":1655,"y":1840,"z":0},{"x":1265,"y":1795,"z":3},{"x":1235,"y":1765,"z":0},{"x":1265,"y":1840,"z":0},{"x":1695,"y":1920,"z":1},{"x":1680,"y":1930,"z":1},{"x":1265,"y`
-+`":1925,"z":2},{"x":1250,"y":765,"z":30},{"x":1250,"y":335,"z":29},{"x":1270,"y":335,"z":30},{"x":1275,"y":770,"z":30},{"x":1280,"y":780,"z":-7},{"x":1425,"y":925,"z":-9},{"x":1505,"y":925,"z":-9},{"x":1605,"y":1030,"z":1},{"x":1590,"y":1040,"z":1},{"x":1600,"y":1065,"z":1},{"x":1600,"y":1240,"z":1},{"x":1585,"y":1265,"z":1},{"x":1265,"y":1215,"z":0},{"x":1280,"y":1260,"z":0},{"x":1265,"y":1245,"z":0},{"x":1250,"y":1260,"z":1},{"x":1585,"y":1295,"z":1},{"x":1595,"y":1300,"z":1},{"x":1590,"y":1415`
-+`,"z":1},{"x":1265,"y":1375,"z":0},{"x":1250,"y":1365,"z":1},{"x":1265,"y":1415,"z":0},{"x":1610,"y":1435,"z":1},{"x":1265,"y":2015,"z":1},{"x":1300,"y":2050,"z":0},{"x":1640,"y":2050,"z":0},{"x":1630,"y":2125,"z":0},{"x":1665,"y":2145,"z":1},{"x":1785,"y":2280,"z":4},{"x":1720,"y":2125,"z":2},{"x":1755,"y":1990,"z":3},{"x":1800,"y":1995,"z":3},{"x":1705,"y":2145,"z":2},{"x":1730,"y":2270,"z":2},{"x":1735,"y":2280,"z":3},{"x":1715,"y":2280,"z":10},{"x":1675,"y":2270,"z":1},{"x":1680,"y":2280,"z":`
-+`10},{"x":1630,"y":2280,"z":0},{"x":1620,"y":2290,"z":1},{"x":1620,"y":2435,"z":33},{"x":1320,"y":2360,"z":24},{"x":1295,"y":2305,"z":15},{"x":1320,"y":2430,"z":43},{"x":1295,"y":2355,"z":23},{"x":1295,"y":2720,"z":108},{"x":1295,"y":2650,"z":95},{"x":1615,"y":2645,"z":86},{"x":1620,"y":2760,"z":110},{"x":1575,"y":2770,"z":113},{"x":1360,"y":2825,"z":114},{"x":1325,"y":2835,"z":115},{"x":1750,"y":1935,"z":2},{"x":1800,"y":1805,"z":2},{"x":1760,"y":1945,"z":2},{"x":1285,"y":765,"z":-10},{"x":1585,`
-+`"y":770,"z":-10},{"x":1590,"y":780,"z":-9},{"x":1625,"y":780,"z":-5},{"x":1630,"y":770,"z":1},{"x":1780,"y":775,"z":1},{"x":1790,"y":805,"z":0},{"x":1780,"y":995,"z":1},{"x":1725,"y":995,"z":0},{"x":1720,"y":1025,"z":1},{"x":1580,"y":200,"z":-181},{"x":1580,"y":670,"z":-37},{"x":1290,"y":665,"z":-39},{"x":1285,"y":200,"z":-183},{"x":1315,"y":185,"z":-187},{"x":1535,"y":185,"z":-187},{"x":1290,"y":2425,"z":87},{"x":1290,"y":2365,"z":75},{"x":1310,"y":2365,"z":75},{"x":1310,"y":2425,"z":87},{"x":1`
-+`295,"y":2440,"z":49},{"x":1290,"y":2465,"z":60},{"x":1315,"y":2830,"z":165},{"x":1315,"y":2855,"z":165},{"x":1295,"y":2855,"z":166},{"x":1290,"y":2840,"z":166},{"x":1335,"y":2855,"z":159},{"x":1335,"y":2835,"z":159},{"x":1360,"y":2835,"z":159},{"x":1355,"y":2860,"z":160},{"x":1620,"y":720,"z":53},{"x":1620,"y":770,"z":53},{"x":1595,"y":770,"z":53},{"x":1595,"y":760,"z":53},{"x":1600,"y":720,"z":55},{"x":1600,"y":710,"z":78},{"x":1600,"y":335,"z":78},{"x":1620,"y":335,"z":76},{"x":1620,"y":710,"z`
-+`":76},{"x":1780,"y":305,"z":58},{"x":1630,"y":305,"z":58},{"x":1750,"y":1945,"z":35},{"x":1705,"y":2135,"z":34},{"x":1665,"y":2135,"z":35},{"x":1640,"y":2120,"z":34},{"x":1640,"y":2105,"z":35},{"x":1685,"y":1935,"z":36},{"x":1730,"y":1020,"z":64},{"x":1730,"y":1005,"z":64},{"x":1785,"y":1005,"z":64},{"x":1780,"y":1020,"z":64}],"polys":[[0,1,2,3,4,5],[6,7,8,9],[4,6,9,10,11,12],[4,12,13,5],[13,14,5],[15,9,8,16,17],[8,7,18],[8,18,19,20,16],[15,17,21,22],[23,22,21,24,25],[26,27,28,29,30,31],[26,31,3`
-+`2,33,34,35],[36,37,38],[38,39,40,41],[36,38,41,42,43,44],[42,45,43],[43,46,47,48],[43,48,44],[36,44,49],[36,49,50,51],[52,53,54,55],[55,56,57],[52,55,57],[52,57,58,59,60,61],[62,60,59,63],[59,58,64,65,40,39],[64,66,65],[59,39,38,37,63],[67,68,69,70],[67,70,71,72,73,74],[74,75,67],[76,45,42,77],[77,78,79],[76,77,79,80,81],[79,82,80],[80,83,81],[76,81,84],[76,84,85,86,87],[86,88,89],[86,89,87],[87,90,76],[91,86,85,92,93,94],[94,95,96,97],[94,97,91],[98,99,100,101],[98,101,102],[103,104,105],[102,1`
-+`03,105,106,107],[106,108,107],[98,102,107,109],[98,109,110],[98,110,111,112],[98,112,113,114,115],[113,116,117,114],[118,119,120,121],[25,24,122,123],[124,125,126],[122,124,126,127,123],[128,129,130,131,132,133],[130,134,135,131],[132,136,137,133],[133,138,128],[139,140,141,142],[143,126,125,130,144],[125,124,122,134,130],[130,129,145,144],[146,147,148,149],[146,149,150,151,152],[146,152,153],[146,153,154,155,156],[146,156,157,158],[157,159,158],[146,158,160],[146,160,161,162,163],[161,164,165,1`
-+`66,162],[167,168,169,170,171],[165,167,171,166],[28,27,172],[28,172,173,174,175],[28,175,176,177],[28,177,178,179],[28,179,180,181,29],[182,181,180,183],[183,184,185],[182,183,185,186],[185,187,188,189],[185,189,186],[186,190,182],[53,182,190,54],[93,92,191,192],[93,192,193],[193,82,79],[93,193,79,194,195],[79,196,194],[93,195,197,198,199],[197,200,198],[93,199,100,99,201],[93,201,95,94],[202,203,204,205,206],[207,208,209,210,211],[212,213,214,215],[2,1,216,217,218,20],[216,219,217],[218,220,16,`
-+`20],[2,20,19,221],[221,3,2],[222,223,224,225,226],[227,228,229,230,231],[227,231,232],[227,232,233,234],[235,236,237],[238,239,240,241],[242,243,244,245],[242,245,246],[247,248,249,250],[251,246,247,250,252,253],[242,246,251,254],[242,254,188,255],[188,187,255],[242,255,256],[242,256,257,258],[242,258,178,176],[178,177,176],[242,176,175,174],[259,260,261,262,263,264],[264,265,259],[266,267,268,269],[270,271,272,273],[272,274,275,276],[276,277,278,279,280],[272,276,280,281],[272,281,282,283,284],`
-+`[285,286,287,273,288],[273,289,288],[283,285,288,284],[272,284,290],[272,290,289,273],[131,135,291,292,293],[131,293,294],[294,295,296],[296,297,298],[298,299,300],[298,300,301,302,148,131],[303,304,305],[306,307,308,309,310],[305,306,310],[303,305,310,311],[301,303,311,302],[148,147,132,131],[296,298,131],[294,296,131],[312,313,314],[218,217,315,316,317,318],[218,318,319],[218,319,320,321,322,323],[320,324,321],[218,323,325,326],[218,326,327],[218,327,328,329],[218,329,330,331,332],[218,332,333`
-+`,334],[333,335,334],[218,334,336,337],[336,338,337],[218,337,339],[218,339,340],[218,340,341,342,343],[341,344,345,346],[341,346,342],[218,343,347],[218,347,348,349,350],[349,351,350],[218,350,352,353],[218,353,354,355],[355,220,218],[356,357,358,359],[358,360,359],[361,362,363],[364,361,363,365,366],[367,364,366],[359,367,366,368,369,370],[366,371,368],[368,372,369],[369,373,370],[370,374,375],[359,370,375],[359,375,376],[359,376,377,378],[356,359,378,379],[356,379,380,381],[381,382,383],[356,3`
-+`81,383,384],[356,384,385,386,387],[386,388,387],[356,387,389],[356,389,390],[356,390,391,392],[391,393,394,392],[392,395,396],[356,392,396],[356,396,65,66,397],[244,243,398,399,400],[398,159,157,399],[244,400,401,402,403],[244,403,404,405],[404,249,248,405],[406,363,362,407,408],[409,360,358,357,410],[407,409,410,411],[410,412,413,414],[410,414,411],[407,411,408],[415,394,393,416],[415,416,417],[415,417,388,386,418],[386,385,419],[419,420,421],[386,419,421,422,423,424],[422,425,426,423],[386,424`
-+`,427],[386,427,418],[415,418,428],[415,428,424,423],[250,249,404,429],[250,429,430,252],[431,432,433,434],[431,434,435,436],[437,438,439,440,441],[442,443,444,445,446,447],[445,448,449,446],[450,451,452,453,454,455],[456,457,458,459],[460,461,462,463,464],[465,466,467,468],[469,470,471,472],[430,429,473,474,475],[430,475,476],[476,477,478],[430,476,478,479,480],[478,481,482],[483,484,485,486,487],[485,488,489,490],[485,490,486],[482,483,487,491],[478,482,491,479],[479,492,480],[430,480,493,494],`
-+`[495,496,497,498],[498,499,495],[500,501,502,503,504],[504,505,506],[500,504,506,507,508],[507,509,508],[510,511,512,513,514],[515,516,517,518],[519,515,518],[520,519,518,521],[513,520,521,522],[513,522,523,524,514],[525,526,527,528,529],[530,531,532,533,534],[530,534,535,536,537,538],[539,374,370],[539,370,373,540],[540,541,542],[540,542,543,544],[544,545,546],[540,544,546],[539,540,546,547],[539,547,548,549,550],[539,550,551,552],[553,552,551,554],[551,550,549,555],[551,555,556,557],[554,551,5`
-+`57,558],[554,558,559,560],[554,560,561,562,563,564],[564,565,566,567,568,569],[564,569,570],[568,567,571,572],[573,568,572,574,575],[573,575,576,577],[576,578,579,577],[577,580,581],[573,577,581,570],[570,581,582],[564,570,582,583,584,585],[582,586,583],[564,585,587],[554,564,587],[554,587,588],[554,588,589,590],[589,584,583,591],[589,591,590],[554,590,592,593],[592,594,595,596],[592,596,593],[597,598,599,600,601,602],[603,481,478,604,605,606],[603,606,607,608],[607,609,610,611],[607,611,612,613`
-+`,614,615],[607,615,608],[616,617,618,619],[619,620,621],[616,619,621,622,623],[624,625,626,627],[329,328,628,629,630],[329,630,631],[632,633,634,635],[636,632,635],[636,635,637],[631,636,637],[329,631,637,638],[329,638,639,640,330],[641,642,635,634],[639,641,634,640],[640,643,644],[644,645,646],[640,644,646,330],[646,331,330],[647,648,649,650,651],[652,653,654,655],[656,657,658,659,660],[610,609,661,662],[610,662,663,664],[610,664,665],[610,665,666,667,668],[667,669,668],[610,668,670,671],[610,6`
-+`71,612,611],[672,673,674,675,564,563],[672,563,562,561,559,558],[557,556,676,677],[557,677,678,679],[558,557,679],[558,679,672],[680,681,682,683,684,685],[685,686,680],[317,316,687],[317,687,688,689,690,691],[691,692,322,321],[317,691,321,324],[693,691,690,694,695,696],[691,693,697,698],[698,692,691],[699,700,701,702],[674,673,703,704],[674,704,705,706],[675,674,706,707,708,709],[706,705,710],[706,710,711,707],[675,709,712],[675,712,713,714,715],[714,579,578,716],[714,716,572,571],[714,571,566,5`
-+`65,715],[717,718,719,720],[721,722,723,724],[721,724,725,667,666,726],[721,726,727,728],[696,729,730,731],[693,696,731,732],[733,693,732,734,735],[736,737,738,739,740,741],[736,742,743],[736,743,744,745,746],[736,746,747,748,749,737],[750,751,752,753],[740,739,754],[754,755,756],[740,754,756,757,758,759],[740,759,760],[740,760,761],[762,763,764,765,766],[761,762,766],[740,761,766,767,768,769],[740,769,770],[740,770,771],[740,771,772],[772,773,774],[740,772,774,775,776],[740,776,777],[740,777,778`
-+`,779],[778,780,779],[740,779,781,782],[740,782,783],[740,783,784,785,741],[786,787,788],[788,789,790],[786,788,790],[786,790,791,792,793],[794,793,792,711],[786,793,795,796],[797,798,799,800,801,802],[803,804,805,806,807,808],[803,808,809,810],[803,810,811,812,813],[811,814,812],[812,815,816,813],[813,817,803],[818,819,820,821,822],[823,824,825],[823,825,826],[826,827,828],[823,826,828,829],[823,829,789,788],[822,823,788],[818,822,788,787,830],[787,831,830],[830,832,818],[792,791,833,834],[711,7`
-+`92,834,835],[711,835,836,837,838],[837,839,840,838],[711,838,841],[711,841,842],[711,842,843,844],[843,845,844],[844,846,707,711],[847,780,778,848,849,850],[847,850,851,852],[708,707,846],[708,846,844,853,854],[844,845,853],[735,855,856],[857,733,735,856,858],[723,722,859,860],[723,860,861,862],[723,862,863],[863,864,865],[723,863,865,866],[723,866,867,868],[867,869,821,820],[867,820,819,870,868],[870,871,868],[872,873,874,875],[859,849,848,876,861,860],[848,877,876],[878,879,880,881],[882,883,8`
-+`84],[884,885,886,887],[882,884,887,888,889],[882,889,890,891],[882,891,758,892],[758,757,892],[882,892,893,894],[894,895,882],[896,897,898,899,900],[901,902,903,904,905],[906,907,908],[909,906,908,910,911],[906,909,912,913],[912,914,915,916,917],[912,917,913],[918,906,913,919],[920,918,919,921,922],[923,924,925,926,927],[923,927,928,929,930],[884,883,931,885],[932,933,931,934],[933,935,886],[931,933,886,885],[936,937,938,939],[940,941,942,943,944,945],[857,858,946,947,948],[949,950,951,952],[953`
-+`,954,955,956,957],[955,954,958,948,947],[955,947,946,959,960],[959,961,962,960],[963,964,965,966],[965,967,966],[966,968,963],[774,773,969],[774,969,970,971,972],[973,974,975,976,977,978],[979,974,973,980],[979,980,981,982],[971,979,982,972],[972,775,774],[983,984,985,986],[985,987,988,986],[768,767,989],[768,989,990,991,992],[990,993,991],[768,992,971,994],[971,970,994],[995,996,997,998],[973,978,999,1000,1001],[973,1001,981,980],[837,836,1002],[1002,1003,1004],[837,1002,1004,1005],[837,1005,10`
-+`06,1007,1008,1009],[1006,1010,1007],[1009,1011,1012],[837,1009,1012],[1012,839,837],[1013,1014,1015,1016,1017,1018],[1013,1018,1019,1020],[953,957,1021,1022,1023],[953,1023,1024,1025,958,954],[931,1025,1024,1026,1027],[1026,1028,1027],[931,1027,1029,1030],[931,1030,1031,1032,1033,934],[1034,1033,1032,1035,1036],[1010,1006,1037,1038],[1038,1039,1040,1041],[1010,1038,1041,1042,1043,1008],[1042,1044,1043],[1008,1007,1010],[1045,1044,1042,1046,1047],[1045,1047,1048,1049],[1048,1050,1051],[1051,1052,`
-+`1053,1049],[1048,1051,1049],[990,1054,1055,1056,1057,1058],[990,1058,1059,993],[1060,1061,1062,1063,1064],[1061,1060,977,976,1065,1066],[1065,1067,1066],[1066,1068,1061],[1036,1035,1069,1070,1071],[1070,1072,1073,1074,1075],[1070,1075,1071],[1076,1077,1078,1079],[1076,1079,1080],[1076,1080,1081,1082,1083],[1081,1084,1085,1082],[1082,1086,1083],[1076,1083,1087],[1076,1087,1088],[1076,1088,1089,1090],[1089,1091,1092,1093],[1089,1093,1094],[1090,1094,1095,1096,1097,1076],[1089,1094,1090],[1096,1098`
-+`,1097],[1076,1097,1099,1100],[1100,1101,1076],[1102,1098,1096],[1102,1096,1095,1103],[1102,1103,1104,1055,1054,1105],[1102,1105,1106,1107],[1108,1109,1110,1111],[1112,1113,1114,1115],[1116,1117,1118,1119,1120],[1121,1122,1123],[1056,1055,1104,1124],[1056,1124,1125,1126,1057],[1125,1127,1126],[1035,1032,1031,1128,1129,1130],[1128,1131,1129],[1035,1130,1132,1133,1069],[1133,1134,1072,1070,1069],[1135,1134,1133,1078,1136],[1078,1077,1136],[1063,1062,1137,1138],[1063,1138,1139,1140,1141,1142],[1141,`
-+`1143,1142],[1144,1145,1146,1142],[1063,1142,1146],[1063,1146,1147],[1063,1147,1148,1149,1064],[1150,1149,1148,1145,1144,1151],[1150,1151,1152],[1150,1152,1153,1154,1155,1156],[1157,1158,1159],[1160,1157,1159,1161,1156],[1155,1160,1156],[1162,1161,1159],[1159,1158,1163,1164],[1162,1159,1164,1165,1166,1167],[1165,1168,1166],[1167,1169,1162],[1170,1167,1166],[1166,1168,1171],[1172,1173,1170,1166,1171,1174],[1172,1175,1176],[1177,1178,1179],[1180,1181,1182,1183],[1184,1180,1183,1185],[1186,1184,1185`
-+`,1187,1188],[1187,1189,1188],[1179,1186,1188,1190],[1177,1179,1190,1191],[1177,1191,1192,1193],[1176,1177,1193,1194],[1172,1176,1194,1195],[1172,1195,1173],[1196,1197,1198,1199],[1198,1200,1201,1199],[1196,1199,1202,1203,1204],[1196,1204,1205,1206,1207],[1208,1209,1210,1211,1040,1039],[1208,1039,1038,1037,1212],[1213,1214,1215,1216],[1217,1218,1219,1220],[1221,1222,1223,1224,1225,1226],[1221,1226,1227],[1228,1227,1229,1230],[1221,1227,1228,1231],[1221,1231,1232,1233,1234],[1221,1234,1235],[1221,`
-+`1235,1236,1237],[1236,1238,1239],[1236,1239,1240,1237],[1241,1242,1243,1244,1245],[1246,1247,1248,1249],[1246,1249,1250],[1246,1250,1251,1252],[1253,1254,1255,1256],[1253,1256,1257,1258],[1259,1256,1255,1260],[1257,1259,1260,1261,1258],[1262,1263,1264,1265],[1262,1265,1266],[1253,1258,1262,1266,1267,1268],[1266,1269,1267],[1268,1267,1270],[1268,1270,1271],[1251,1268,1271,1252],[1272,1091,1089,1273,1274,1275],[1272,1275,1276,1277,1278,1279],[1272,1279,1280,1281],[1272,1281,1282,1283],[1283,1223,1`
-+`222],[1272,1283,1222,1284,1285],[1272,1285,1286,1287],[1286,1288,1287],[1272,1287,1289,1290],[1289,1291,1290],[1272,1290,1292,1293],[1294,1295,1296,1297,1298],[1299,1300,1301,1302,1303],[1304,1175,1172,1174,1305],[1304,1305,1306],[1304,1306,1307,1308],[1308,1309,1310],[1304,1308,1310,1311,1312],[1304,1312,1313,1314,1315],[1314,1316,1317],[1314,1317,1315],[1318,1304,1315,1183,1182],[1182,1181,1319,1318],[1320,1085,1084,1132,1321],[1132,1130,1129],[1129,1131,1322,1323],[1132,1129,1323,1324,1325,13`
-+`26],[1320,1321,1327],[1328,1320,1327],[1328,1327,1326],[1325,1328,1326],[1132,1326,1329],[1132,1329,1321],[1330,1331,1332,1333,1334],[1335,1336,1337,1338],[1339,1340,1341,1342,1343],[1342,1344,1345,1346,1347,1348],[1342,1348,1349,1343],[1350,1351,1352,1353],[1354,1355,1356,1357],[1225,1224,1358],[1225,1358,1359,1360],[1225,1360,1361,1230,1229],[1362,1363,1364],[1361,1362,1364,1230],[1225,1229,1227,1226],[1365,1366,1367,1368,1369],[1210,1209,1370],[1370,1371,1372],[1210,1370,1372,1373],[1210,1373`
-+`,1374,1375],[1210,1375,1376,1377],[1210,1377,1378,1379,1380],[1210,1380,1381,1382],[1382,1211,1210],[1383,1384,1385,1386],[1387,1388,1389,1390,1391],[1392,1393,1394],[1389,1392,1394,1390],[1395,1387,1391,1396],[1392,1395,1396,1397,1393],[1398,1397,1399,1400,1401],[1397,1398,1393],[1402,1403,1404,1405,1406,1407],[1407,1408,1409],[1402,1407,1409],[1402,1409,1410],[1402,1410,1411],[1411,1412,1311],[1402,1411,1311,1310],[1402,1310,1309,1413,1414,1415],[1413,1416,1414],[1417,1418,1419,1420],[1421,142`
-+`2,1423,1424],[1425,1426,1427],[1425,1427,1428,1429],[1425,1429,1430,1431,1432],[1425,1432,1433,1434,1435,1436],[1433,1437,1434],[1434,1438,1439,1435],[1435,1440,1436],[1425,1436,1230,1364],[1425,1364,1363,1441],[1442,1443,1444,1445],[1445,1444,1446,1447],[1445,1447,1448,1449],[1450,1451,1452,1453],[1454,1428,1427,1426,1455],[1454,1455,1456,1457],[1373,1372,1458,1374],[1458,1459,1376,1375,1374],[1460,1461,1462,1463,1464],[1465,1466,1467,1468],[1404,1403,1469,1470,1471,1472],[1472,1473,1474],[1404`
-+`,1472,1474,1475],[1404,1475,1476],[1404,1476,1477,1478,1479,1480],[1480,1405,1404],[1481,1479,1478],[1478,1477,1482,1483],[1483,1484,1485],[1478,1483,1485,1486],[1481,1478,1486,1487],[1481,1487,1488,1489,1490],[1481,1490,1491,1492,1493,1494],[1491,1495,1492],[1496,1470,1469,1497],[1496,1497,1498],[1498,1499,1500],[1496,1498,1500,1501],[1500,1502,1503,1504],[1500,1504,1501],[1505,1506,1507,1508],[1509,1510,1511,1512,1513],[1512,1514,1515],[1512,1515,1516,1517,1513],[1518,1514,1512,1519,1520,1521]`
-+`,[1518,1521,1522,1523,1524,1525],[1526,1524,1523,1527,1528,1529],[1530,1531,1532,1533],[1431,1430,1534,1535],[1431,1535,1536,1537,1538],[1431,1538,1539,1540,1541,1542],[1541,1543,1544,1542],[1545,1544,1543],[1545,1543,1541,1546],[1545,1546,1547,1548,1549,1550],[1551,1549,1548,1552,1511,1510],[1458,1553,1554],[1554,1555,1556],[1554,1556,1557,1558],[1559,1560,1561,1558],[1562,1559,1558],[1557,1562,1558],[1458,1554,1558,1563],[1558,1564,1563],[1458,1563,1565,1566],[1565,1567,1566],[1458,1566,1568],`
-+`[1458,1568,1569],[1458,1569,1570,1571,1572],[1570,1573,1571],[1571,1574,1572],[1572,1459,1458],[1553,1529,1528,1555,1554],[1473,1248,1247,1575],[1575,1576,1577],[1473,1575,1577,1578,1579],[1473,1579,1486,1580],[1486,1485,1484,1580],[1473,1580,1581,1474],[1582,1523,1522,1583,1584],[1583,1561,1560,1584],[1523,1582,1527],[1534,1585,1586,1587],[1588,1589,1590,1591],[1534,1587,1588,1591,1592,1593],[1534,1593,1594,1536],[1594,1537,1536],[1536,1535,1534],[1595,1596,1597,1598,1599,1600],[1585,1597,1596,`
-+`1586],[1601,1602,1603,1604],[1605,1573,1570,1577,1576,1606],[1607,1608,1609,1610],[1611,1612,1613,1614],[1615,1616,1617,1618,1619],[1620,1621,1622,1623],[1624,1590,1589,1625],[1626,1627,1628,1629,1630,1631],[1632,1633,1634,1635]],"regions":[588,588,588,588,588,158,158,158,158,158,471,471,131,131,131,131,131,131,131,131,234,234,234,234,33,33,33,33,1153,1153,1153,386,386,386,386,386,386,386,386,386,386,352,352,352,636,636,636,636,636,636,636,636,636,636,947,354,354,354,10,10,10,10,1075,12,12,12,31`
-+`5,315,315,315,315,315,315,315,315,315,315,387,387,387,387,387,532,532,532,532,532,532,765,368,368,368,368,368,368,368,368,368,866,1033,1155,27,27,27,27,27,1162,1086,1086,1086,1161,805,520,520,520,520,520,520,520,520,520,520,520,520,1034,1034,1165,1087,1087,1087,1087,1087,1087,1087,1087,1087,1087,7,7,7,7,7,7,7,7,7,7,7,7,7,7,1169,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,772,772,772,772,772,783,783,783,783,783,783,65`
-+`5,655,655,655,655,655,655,655,655,655,655,389,389,1005,1005,920,1364,1364,921,1180,1183,1181,1091,472,472,472,472,472,472,472,472,472,472,472,472,1187,1187,1039,1039,1039,1039,1196,1196,1196,1196,1196,1196,1093,1041,1041,235,235,235,235,235,235,235,235,235,235,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,134,1199,758,758,758,758,758,899,899,899,1059,544,544,544,544,544,544,544,544,544,544,544,544,544,544,959,1096,1410,545,545,545,545,545,545,545`
-+`,227,227,227,227,227,227,877,877,160,160,160,160,80,80,80,1212,186,186,99,99,99,99,99,99,99,99,1213,546,546,546,73,73,73,213,213,213,213,1218,46,46,46,46,46,46,46,46,46,46,46,46,46,46,46,46,46,46,46,326,326,326,326,326,326,902,933,933,933,933,933,933,424,424,424,424,424,424,424,424,424,424,138,138,138,138,138,138,138,138,138,374,374,108,108,108,177,177,674,674,674,674,674,674,674,674,674,1226,461,461,1237,548,548,548,548,548,548,548,548,1233,1044,1105,1105,1105,1105,1105,1105,1105,1460,1460,549,`
-+`549,549,549,1107,846,61,1243,19,19,19,19,1463,1463,1463,605,605,605,605,605,605,605,1113,1113,445,445,445,445,445,1250,426,426,495,495,495,495,495,495,495,495,792,792,37,37,205,205,205,205,205,84,84,84,84,84,123,123,123,123,123,448,448,561,561,561,561,293,293,293,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,165,165,165,165,1254,906,1256,1474,214,214,214,69,69,69,69,68,68,483,483,483,483,483,483,483,512,512,512,512,512,512,394,394,394,394,394,328,328,328,328,328,328,328,328,328,328,328,328,328,32`
-+`8,328,1266,1266,1266,1266,171,171,1263,936,266,266,266,266,266,266,266,266,266,1123,1310,1310,1310,1310,1310,1310,1310,1310,1310,1310,1310,1310,1310,1310,465,465,465,465,465,465,465,465,465,465,465,1126,1063,450,450,450,450,450,450,450,450,450,450,399,399,399,399,399,399,399,399,399,399,1274,1277,884,884,884,1128,969,268,268,268,268,268,268,1282,257,257,257,257,257,257,257,257,1283,943,943,943,943,943,943,943,403,403,403,403,403,403,403,403,403,1293,1135,29,29,29,29,29,29,29,29,29,1302,1302,1302`
-+`,973,321,321,298,298,974,995,363,363,363,363,363,363,331,331,331,331,331,331,331,331,634,634,634,634,634,634,997,192,192,192,104,104,104,1140,26,26,26,26,217,217,217,217,56,56,56,56,56,56,56,56,56,56,56,56,56,56,56,56,86,261,261,261,261,261,261,52,52,52,51,51,51,51,51,51,299,288,1316,253,1317,1319,1322,1321,635,1324,1325],"neighbors":[[-1,101,105,-1,3,-1],[-1,6,5,2],[-1,1,-1,-1,-1,3],[2,-1,4,0],[-1,-1,3],[-1,1,7,-1,8],[1,-1,7],[6,-1,104,103,5],[5,-1,9,-1],[-1,8,-1,55,-1],[-1,77,81,-1,-1,11],[10,`
-+`-1,-1,-1,-1,-1],[-1,27,14],[27,25,-1,14],[12,13,-1,15,17,18],[31,-1,14],[-1,-1,-1,17],[16,-1,14],[14,-1,19],[18,-1,-1,-1],[-1,88,-1,22],[-1,-1,22],[20,21,23],[22,-1,25,24,-1,-1],[-1,23,27,-1],[23,-1,26,-1,13,27],[-1,200,25],[25,13,12,-1,24],[-1,-1,-1,29],[28,-1,-1,-1,-1,30],[-1,-1,29],[-1,15,-1,33],[-1,-1,33],[31,32,34,35,36],[91,-1,33],[-1,-1,33],[33,-1,37],[36,-1,41,39,40],[-1,-1,39],[38,-1,37],[-1,-1,37],[-1,37,-1,89,97,43],[97,-1,-1,43],[42,-1,41],[-1,96,-1,45],[44,-1,49],[-1,-1,47],[-1,46,-`
-+`1,48,49],[-1,-1,47],[45,47,-1,50],[49,-1,51],[50,-1,-1,52],[51,-1,53,-1,-1],[-1,-1,-1,52],[-1,-1,-1,-1],[9,-1,57,-1],[64,63,57],[64,56,-1,-1,55],[-1,65,59,148,60,61],[64,-1,137,58],[-1,-1,-1,58],[-1,-1,58],[-1,-1,-1,-1],[-1,56,64,65,-1],[56,57,-1,59,63],[58,-1,-1,63],[-1,148,-1,67],[66,-1,-1,-1,68],[67,-1,69],[68,-1,-1,-1,70],[69,-1,71,72],[202,-1,70],[70,-1,73],[72,-1,74,-1,-1],[-1,-1,76,-1,73],[-1,-1,-1,-1,76],[-1,75,-1,74],[10,-1,78],[77,-1,-1,123,79],[78,123,122,80],[79,122,-1,81],[80,-1,82,`
-+`-1,10],[-1,81,-1,84],[-1,-1,84],[82,83,86,87],[-1,118,-1,86],[85,-1,84],[-1,88,84],[-1,87,-1,20],[41,-1,-1,90],[89,-1,92],[-1,34,92],[90,91,93,-1,94],[-1,-1,92],[92,-1,95,-1,96],[-1,-1,94],[94,-1,44,-1,97],[96,-1,42,41],[-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[0,-1,102,152,103,104],[-1,-1,101],[174,-1,7,101],[101,7,-1,105],[-1,0,104],[-1,-1,-1,-1,-1],[-1,-1,-1,-1,108],[107,-1,109],[108,-1,-1,-1],[-1,-1,-1],[-1,-1,-1,-1],[-1,201,-1,113],[112,-1,116],[-1,205,223,115],[116,-1,114,224,-1,-1]`
-+`,[113,115,-1,117],[116,-1,118,119],[85,-1,117],[117,-1,120],[119,-1,-1,121],[120,-1,122,123],[80,79,121],[121,79,78,-1],[-1,-1,-1,-1,-1,125],[-1,-1,124],[-1,-1,-1,-1],[-1,-1,136,-1],[-1,-1,-1,130],[-1,-1,-1,-1,130],[128,129,-1,131],[130,-1,-1,134,135],[-1,-1,-1,133,134],[136,-1,132],[-1,132,-1,131],[131,-1,136],[135,-1,133,127],[59,-1,-1,-1,138],[137,-1,150],[-1,-1,150],[-1,-1,149],[-1,-1,142],[141,-1,147,-1,148,149],[-1,-1,146],[-1,-1,-1,-1,145],[-1,144,146],[143,145,-1,147],[-1,146,-1,142],[66`
-+`,-1,58,142],[140,142,150],[139,149,138],[-1,-1,-1],[101,-1,-1,339,-1,153],[152,-1,154],[153,-1,155,341,-1,156],[-1,342,154],[154,-1,-1,157],[156,-1,158],[157,-1,307,159],[158,314,320,-1,160],[159,-1,161,162],[-1,-1,160],[160,-1,163,164],[-1,-1,162],[162,-1,165],[164,-1,166],[165,-1,168,-1,169],[-1,-1,-1,168],[167,-1,166],[166,-1,170],[169,-1,-1,171,172],[-1,-1,170],[170,-1,-1,173],[172,-1,-1,174],[-1,103,173],[-1,207,176,188],[207,-1,175],[-1,206,178],[-1,177,-1,-1,179],[-1,178,180],[-1,179,181,`
-+`182,183,185],[-1,-1,180],[-1,-1,180],[-1,263,180],[262,-1,185],[180,184,186],[185,-1,187],[186,-1,-1,188],[175,187,-1,189],[188,-1,-1,191],[-1,-1,191],[189,190,-1,192],[191,-1,215,193,194],[214,-1,192],[192,-1,195],[194,-1,196],[195,-1,197,199],[-1,212,-1,196],[-1,-1,199],[196,198,200],[199,-1,26,-1,-1],[112,-1,202,-1,203],[-1,71,-1,201],[201,-1,-1,-1,204],[203,-1,205,-1],[223,114,-1,204],[-1,177,-1,211,-1],[-1,176,175,-1,208],[-1,207,210,211],[-1,-1,-1,210],[209,-1,208],[208,-1,206],[-1,197,-1,`
-+`213],[212,-1,214],[213,-1,193,220,221],[192,-1,217],[-1,-1,217],[215,216,-1,218,222,219],[-1,-1,-1,217],[217,-1,220],[219,-1,214],[214,-1,222],[221,-1,217,-1],[114,205,-1,224],[223,235,-1,115],[-1,-1,-1,226],[225,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,229,-1,-1],[-1,-1,-1,228],[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[224,-1,-1,-1,236],[235,-1,238],[-1,-1,238],[236,237,244,245,246],[298,-1,244],[-1,-1,242,-1,243],[-1,-1,-1,242],[241,-1,240],[-1,240,-1,244],[23`
-+`9,243,-1,238],[-1,-1,238],[238,-1,-1,-1],[-1,-1,-1,248],[-1,-1,247],[-1,-1,-1,-1,251],[-1,-1,251],[249,250,-1,252,-1],[-1,-1,251],[-1,-1,-1,258,-1],[-1,-1,-1,255],[-1,254,256],[-1,255,-1,257],[-1,256,-1,258],[257,-1,-1,-1,253],[-1,-1,-1,-1,-1],[-1,-1,-1,-1,261],[260,-1,-1,-1,-1,-1],[-1,184,263],[262,183,-1,268],[-1,-1,265],[264,-1,-1,267],[-1,-1,267],[265,266,268],[263,267,-1,269],[268,-1,-1,272,270],[269,272,271,-1],[-1,270,274,-1],[270,269,-1,273],[272,-1,333,274],[271,273,335,275],[274,332,-1`
-+`,276],[275,-1,332,332,331,289],[-1,356,-1,279,-1,278],[277,-1,286],[277,-1,355,280],[-1,279,-1,-1,281],[280,-1,282,284],[-1,354,-1,281],[-1,-1,284],[281,283,285,-1],[284,-1,286],[278,285,287,292,-1,288],[-1,-1,286],[286,-1,289],[276,288,290],[289,-1,291],[290,-1,293,294],[-1,286,-1,293],[292,-1,291],[291,-1,296,-1],[-1,-1,-1,296],[295,-1,294],[-1,-1,-1,-1,-1,-1],[-1,239,-1,-1,-1,299],[298,-1,302,-1],[-1,324,330,301],[300,330,-1,-1,-1,302],[301,-1,299],[-1,-1,-1,305],[-1,-1,305],[303,304,-1,-1,-1`
-+`],[-1,-1,-1,-1],[158,-1,-1,-1,308],[307,-1,313],[-1,-1,315,310],[-1,309,311],[310,-1,312],[-1,311,313],[308,312,-1,314],[313,-1,316,319,159],[-1,-1,309,316],[-1,315,-1,314],[-1,-1,319],[-1,-1,319],[317,318,320,314],[-1,159,319],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[300,-1,-1,325],[324,-1,-1,326],[325,-1,327],[326,-1,359,328,329],[-1,-1,327],[327,-1,-1,330],[329,-1,301,300],[-1,347,349,-1,276,332],[331,276,276,-1,275,336],[273,-1,-1,334],[333,-1,-1,335],[274,334,336],[335,-1,332],[-1,-`
-+`1,-1,-1,-1,338],[-1,-1,337],[152,-1,340],[339,-1,-1,-1,343,342],[345,-1,154,342],[340,341,155,-1],[344,340,-1,-1,-1,362],[343,-1,-1,345],[-1,341,344],[-1,-1,-1,-1],[331,-1,-1,348],[347,-1,350,349],[331,348,351,422,-1,352],[348,-1,351],[350,-1,419,349],[349,-1,353],[352,-1,-1,356,-1],[-1,282,-1,355],[354,-1,279,356],[355,-1,277,-1,353],[-1,-1,-1,-1],[-1,427,-1,359],[358,-1,-1,327,-1,360],[359,-1,-1,-1],[-1,-1,-1,362],[343,361,-1,363],[-1,362,-1,-1,426],[367,-1,-1,369,387,-1],[-1,-1,366],[365,-1,-`
-+`1,-1,367],[366,-1,-1,-1,-1,364],[-1,-1,-1,-1],[364,-1,371],[-1,-1,371],[369,370,-1,445,-1,372],[371,-1,373],[372,-1,376],[-1,-1,-1,-1,375],[-1,374,376],[373,375,-1,483,-1,377],[376,-1,378],[377,-1,379],[378,-1,381],[-1,474,381],[379,380,480,-1,382],[381,-1,383],[382,-1,384,385],[420,-1,383],[383,-1,-1,386],[385,-1,387],[386,-1,-1,-1,364],[-1,408,390],[406,-1,390],[388,389,391],[390,-1,411,392,393],[-1,391,412,-1],[391,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,396],[395,-1,-1,397],[396,-1,398`
-+`,399,400],[-1,-1,397],[-1,-1,-1,397],[-1,-1,397],[-1,434,433,-1,408],[-1,-1,403],[402,-1,405],[-1,-1,405],[403,404,-1,406],[405,-1,389,407],[-1,406,408],[401,407,388,409,410],[-1,-1,408],[-1,-1,408],[391,-1,-1,412],[392,411,-1,413],[412,-1,491,414,415],[498,-1,-1,413],[413,-1,416],[415,-1,417],[416,-1,418,419],[-1,424,417],[423,422,351,417],[-1,384,-1,437,-1,421],[420,-1,-1,-1],[349,419,423],[422,419,424,-1,-1],[418,-1,423],[-1,-1,426],[-1,363,425,-1,465],[358,-1,437,428],[427,437,-1,429],[428,-`
-+`1,431],[-1,-1,431],[429,430,-1,432],[431,-1,434,-1],[-1,-1,401,434],[433,401,-1,435,432],[-1,-1,434],[-1,-1,-1,-1],[-1,420,438,-1,428,427],[-1,-1,437],[-1,-1,-1,-1],[-1,459,442],[459,462,-1,442],[440,441,-1,-1,443],[442,-1,-1,444],[443,-1,445,446],[371,-1,444],[444,-1,-1,447],[-1,-1,446],[-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,451],[452,450,-1,-1,-1],[451,-1,454,455],[-1,-1,-1,-1,454],[453,-1,452],[-1,452,-1,456],[-1,455,-1,-1,-1],[-1,-1,-1,-1,458],[457,-1,-1,-1,-1],[440,-1,462,441],[-1,462,506`
-+`,-1],[-1,-1,462],[460,461,441,459],[-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[426,-1,469,468,-1],[-1,-1,-1,-1],[502,468,-1,-1,501],[467,502,-1,465,469],[468,465,-1,470,-1],[-1,-1,-1,469],[-1,-1,472,473],[-1,-1,471],[-1,-1,471],[380,-1,475],[474,-1,487,479,480],[477,-1,-1,521,-1,489],[-1,476,490,478],[477,490,-1,479],[-1,478,-1,475],[-1,381,475],[-1,-1,482,-1],[-1,-1,-1,481],[376,-1,484],[483,-1,485,-1,486],[519,-1,484],[484,-1,487,-1],[475,-1,486],[-1,-1,-1,-1],[476,-1,-1,-1,490],[489,-1,478,477],[413,-`
-+`1,493],[-1,-1,493],[491,492,-1,494],[493,-1,495,512,-1,497],[508,512,494],[-1,-1,497],[494,496,498],[-1,414,497],[-1,-1,-1,-1,-1,500],[499,-1,-1,-1],[467,-1,-1,-1,502],[501,-1,503,-1,468,467],[-1,502,-1,504,505],[-1,-1,503],[503,-1,-1,506],[505,-1,553,507,-1,460],[-1,506,553,524,-1],[495,-1,597,510],[597,596,-1,510],[508,509,-1,511,-1,512],[513,-1,510],[494,495,510],[-1,511,-1,-1,514],[513,-1,517,-1],[-1,-1,517],[-1,-1,-1,517],[515,516,514],[-1,544,550,551,-1,519],[518,-1,-1,485],[521,-1,559,565`
-+`,-1],[520,-1,476,-1,522,523],[-1,-1,521],[-1,-1,521],[507,555,556,526,-1],[556,-1,-1,-1,526],[525,-1,524],[-1,558,-1,528],[527,-1,529],[528,-1,530,531,532],[-1,647,-1,529],[-1,-1,529],[529,-1,533],[532,-1,534],[533,-1,538,537],[624,-1,-1,536],[535,-1,538],[538,-1,543,539,540,534],[536,537,534],[542,-1,537],[537,-1,-1,541],[-1,-1,540],[-1,539,543],[542,537,-1,544],[543,-1,550,518,-1,545],[544,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1],[518,544,-1,551],[550,-1,552,-1,518],[-`
-+`1,-1,551],[507,506,-1,554,648,555],[-1,649,553],[553,648,-1,556,524],[557,-1,525,524,555],[-1,556,-1,558,-1],[527,-1,557],[520,-1,-1,560],[559,-1,-1,-1,561,563],[-1,-1,560],[566,-1,563,-1],[560,562,564],[563,-1,565],[564,-1,566,-1,520],[-1,565,-1,562,-1,567],[566,-1,568],[567,-1,-1,-1,571,-1],[-1,573,570],[-1,569,572,-1,571],[-1,570,568],[-1,570,574],[569,-1,-1,574],[572,573,-1,575,577,576],[-1,578,574],[-1,-1,574],[-1,574,579],[575,-1,579],[591,-1,577,578,-1,637],[637,-1,590],[-1,-1,587],[-1,64`
-+`6,645,583],[-1,582,-1,584],[-1,583,-1,585,586],[-1,-1,584],[-1,584,-1,587],[581,586,-1,588],[587,-1,-1,589],[-1,588,-1,590],[580,589,-1,591],[590,-1,579],[-1,-1,593,594],[-1,-1,-1,592],[592,-1,-1,-1,595],[594,-1,-1,-1,-1],[-1,671,678,-1,509,597],[596,509,508,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,628,-1,664,669,601],[600,669,603],[603,669,666,-1],[601,602,-1,604],[603,-1,-1,-1,605],[604,-1,606],[605,-1,608,-1],[-1,-1,608],[607,-1,-1,606],[-1,-1,-1,-1,-1],[-1,770,-1,611],[610,-1,612],[611,-1,623,`
-+`-1],[-1,-1,615,614],[613,-1,616,619],[-1,613,-1,616],[-1,615,-1,-1,614],[-1,-1,-1,618],[617,-1,619],[614,-1,618,620,621,-1],[-1,-1,619],[619,-1,622],[621,-1,623],[-1,622,-1,612],[-1,535,-1,-1,-1,625],[624,-1,-1,-1,-1,626],[625,-1,-1,627],[626,-1,-1,629],[-1,600,629],[627,628,-1,-1,630],[629,-1,631,632],[-1,-1,630],[630,-1,633,634],[-1,-1,632],[632,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,580,579,-1,638],[637,-1,639],[638,-1,-1,641],[-1,694,641],[639,640,693,-1,642],[641,-1,-1,644,645],[-1`
-+`,-1,644],[643,-1,642],[-1,642,-1,582,646],[582,-1,-1,645],[-1,530,-1,656,651],[555,553,650],[554,-1,-1,650],[648,649,-1,-1,654,655],[647,-1,652],[-1,651,653],[652,-1,654],[-1,653,650],[650,-1,656],[655,-1,647],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,661,-1],[-1,-1,-1,-1,-1,661],[660,-1,-1,659],[-1,-1,-1,-1],[-1,-1,-1,-1],[600,-1,665],[664,-1,-1,666],[665,-1,668,602,669],[-1,706,668],[-1,667,705,666],[666,602,601,600],[-1,-1,-1,-1,-1],[596,-1,673],[-1,-1,673],[671,672,713,674],[673,713,714,675],`
-+`[674,714,-1,676],[675,-1,-1,-1,677],[676,-1,-1,678],[-1,596,677],[-1,-1,-1,-1],[-1,-1,682,-1,683],[684,-1,682],[-1,681,-1,680],[-1,680,-1,684],[-1,683,-1,686,681],[686,-1,-1,-1,-1],[685,-1,684],[-1,717,722,-1,-1,689],[-1,-1,689],[687,688,690],[689,-1,691],[690,-1,693],[-1,-1,693],[691,692,641,694],[693,640,-1,695,-1,-1],[-1,-1,694],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,711,699],[698,711,-1,700],[699,-1,745,-1,701],[700,-1,702,703,704,705],[-1,-1,701],[-1,-1,-1,701],[-1,-1,701],[701,-1,668,706],[705,66`
-+`7,-1,-1],[-1,-1,708,-1],[707,-1,-1,709],[708,-1,-1,-1],[-1,-1,-1,-1],[-1,699,698,-1,712],[711,-1,-1,-1],[673,-1,714,674],[768,-1,675,674,713],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[687,-1,731,-1,-1,719],[-1,775,719],[717,718,-1,720],[719,-1,721],[720,-1,724,723,-1,722],[-1,687,721],[-1,721,727],[721,-1,-1,726],[-1,774,726],[724,725,774,727],[723,726,-1,728],[727,-1,-1,-1,729],[728,-1,730,-1,-1,-1],[-1,-1,729],[-1,717,-1,732],[731,-1,734],[-1,-1,734],[732,733,736,-1],[-1,-1,-1,736],[735,-1,734],[-1,-1,-`
-+`1,-1],[-1,752,-1,740,-1],[741,-1,740],[739,-1,-1,-1,738],[-1,739,-1,-1,-1,742],[741,-1,776,743,-1,-1],[-1,742,778,-1,769,-1],[-1,-1,-1,-1],[700,-1,784,746],[745,784,783,-1,747],[746,-1,-1,-1,748,-1],[750,749,-1,747],[-1,748,750],[749,748,-1,751],[750,-1,-1,752,-1,-1],[-1,751,-1,-1,738,-1],[-1,769,759],[769,-1,755],[754,-1,758,759],[-1,777,-1,757],[-1,756,758],[-1,757,755],[753,755,760,761],[-1,-1,759],[759,-1,762,763],[-1,-1,761],[761,-1,764],[763,-1,765],[764,-1,766,767,768],[788,-1,765],[-1,-1`
-+`,765],[-1,714,765],[-1,743,-1,754,753],[-1,610,-1,772],[-1,788,772],[770,771,-1,-1,773],[772,-1,774,775],[726,725,-1,773],[773,-1,-1,718],[778,742,-1,777,-1],[-1,756,-1,776],[776,-1,743],[-1,786,-1,781],[-1,793,-1,781],[779,-1,780,-1,-1,782],[781,-1,783,784],[-1,746,782],[746,745,782],[-1,786,-1,-1,-1,-1],[-1,785,-1,779],[-1,-1,-1,-1],[-1,766,-1,771,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,780,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1]]},"links":[{"PolyA":540,"PolyB":5`
-+`46,"PosA":{"x":155.97560975609755,"y":58.78048780487805,"z":8},"PosB":{"x":155,"y":60,"z":53},"cost":2.3426064283290846,"type":1},{"PolyA":647,"PolyB":660,"PosA":{"x":715.6787330316743,"y":-151.9004524886878,"z":0.171945701357466},"PosB":{"x":715,"y":-150,"z":35},"cost":3.02702757298344,"type":1},{"PolyA":28,"PolyB":40,"PosA":{"x":-2020,"y":2500,"z":67},"PosB":{"x":-2017.8823529411766,"y":2500.470588235294,"z":30.36470588235294},"cost":3.253956867279695,"type":1},{"PolyA":83,"PolyB":124,"PosA":{`
-+`"x":-1789,"y":1317,"z":37},"PosB":{"x":-1790,"y":1315,"z":70},"cost":3.3541019662496847,"type":1},{"PolyA":107,"PolyB":198,"PosA":{"x":-1715,"y":2430,"z":65},"PosB":{"x":-1714.4117647058824,"y":2427.6470588235293,"z":10.470588235294118},"cost":3.63803437554516,"type":1},{"PolyA":724,"PolyB":790,"PosA":{"x":1333.6764705882354,"y":2857.205882352941,"z":116.1470588235294},"PosB":{"x":1335,"y":2855,"z":159},"cost":3.858718165706157,"type":1},{"PolyA":220,"PolyB":230,"PosA":{"x":-1580.9049773755655,"`
-+`y":2717.4660633484164,"z":6.895927601809955},"PosB":{"x":-1580,"y":2720,"z":64},"cost":4.036036763977737,"type":1},{"PolyA":53,"PolyB":99,"PosA":{"x":-2000.754716981132,"y":3057.6415094339623,"z":32.735849056603776},"PosB":{"x":-2000,"y":3055,"z":71},"cost":4.120816918460671,"type":1},{"PolyA":93,"PolyB":151,"PosA":{"x":-1759.245283018868,"y":2772.3584905660377,"z":33.735849056603776},"PosB":{"x":-1760,"y":2775,"z":77},"cost":4.120816918460671,"type":1},{"PolyA":694,"PolyB":715,"PosA":{"x":1007.`
-+`0524017467249,"y":2520.3930131004367,"z":96},"PosB":{"x":1010,"y":2520,"z":152},"cost":4.460525553071923,"type":1},{"PolyA":141,"PolyB":249,"PosA":{"x":-1463,"y":-36,"z":8},"PosB":{"x":-1460,"y":-35,"z":69},"cost":4.743416490252569,"type":1},{"PolyA":226,"PolyB":229,"PosA":{"x":-1605,"y":1830,"z":50},"PosB":{"x":-1604,"y":1833,"z":49.8},"cost":4.743416490252569,"type":0},{"PolyA":696,"PolyB":706,"PosA":{"x":840,"y":795,"z":46},"PosB":{"x":843,"y":794,"z":0},"cost":4.743416490252569,"type":1},{"P`
-+`olyA":380,"PolyB":481,"PosA":{"x":-236.76470588235293,"y":577.9411764705883,"z":0},"PosB":{"x":-235,"y":575,"z":44},"cost":5.144957554275324,"type":1},{"PolyA":7,"PolyB":98,"PosA":{"x":-1852.5,"y":-862.5,"z":115.625},"PosB":{"x":-1855,"y":-865,"z":150},"cost":5.303300858899107,"type":1},{"PolyA":488,"PolyB":502,"PosA":{"x":5,"y":-635,"z":61},"PosB":{"x":8.448275862068966,"y":-636.3793103448276,"z":4.655172413793103},"cost":5.570860145311542,"type":1},{"PolyA":35,"PolyB":110,"PosA":{"x":-1826.551`
-+`724137931,"y":2628.6206896551726,"z":33},"PosB":{"x":-1830,"y":2630,"z":78},"cost":5.570860145311619,"type":1},{"PolyA":89,"PolyB":126,"PosA":{"x":-1828.448275862069,"y":2681.3793103448274,"z":33},"PosB":{"x":-1825,"y":2680,"z":77},"cost":5.570860145311619,"type":1},{"PolyA":269,"PolyB":322,"PosA":{"x":-1108.6206896551723,"y":2156.551724137931,"z":-4.793103448275862},"PosB":{"x":-1105,"y":2155,"z":43},"cost":5.908789478687471,"type":1},{"PolyA":206,"PolyB":227,"PosA":{"x":-1597.2413793103449,"y"`
-+`:1753.103448275862,"z":1.8275862068965516},"PosB":{"x":-1600,"y":1750,"z":60},"cost":6.228410989030468,"type":1},{"PolyA":642,"PolyB":697,"PosA":{"x":821.8141592920354,"y":2717.787610619469,"z":96},"PosB":{"x":825,"y":2715,"z":120},"cost":6.349865861589281,"type":1},{"PolyA":62,"PolyB":66,"PosA":{"x":-1790,"y":540,"z":59},"PosB":{"x":-1786,"y":542,"z":32},"cost":6.708203932499369,"type":1},{"PolyA":166,"PolyB":233,"PosA":{"x":-1536,"y":-212,"z":129.26666666666668},"PosB":{"x":-1540,"y":-210,"z":`
-+`175},"cost":6.708203932499369,"type":1},{"PolyA":303,"PolyB":330,"PosA":{"x":-1065,"y":1455,"z":-76},"PosB":{"x":-1061,"y":1453,"z":-112},"cost":6.708203932499369,"type":1},{"PolyA":692,"PolyB":709,"PosA":{"x":866,"y":2693,"z":96},"PosB":{"x":870,"y":2695,"z":141},"cost":6.708203932499369,"type":1},{"PolyA":502,"PolyB":598,"PosA":{"x":346.55737704918033,"y":-627.8688524590164,"z":2.262295081967213},"PosB":{"x":350,"y":-625,"z":48},"cost":6.721936196476996,"type":1},{"PolyA":142,"PolyB":234,"PosA`
-+`":{"x":-1539.5,"y":513.5,"z":28.6},"PosB":{"x":-1535,"y":515,"z":62},"cost":7.115124735378854,"type":1},{"PolyA":724,"PolyB":789,"PosA":{"x":1316.5,"y":2859.5,"z":120.5},"PosB":{"x":1315,"y":2855,"z":165},"cost":7.115124735378854,"type":1},{"PolyA":228,"PolyB":232,"PosA":{"x":-1580,"y":1900,"z":52},"PosB":{"x":-1575.7961783439491,"y":1902.2929936305732,"z":43.5796178343949},"cost":7.182781960208436,"type":0},{"PolyA":176,"PolyB":225,"PosA":{"x":-1679.5205479452054,"y":1847.945205479452,"z":0},"P`
-+`osB":{"x":-1675,"y":1850,"z":37},"cost":7.448452997421284,"type":1},{"PolyA":62,"PolyB":75,"PosA":{"x":-2040,"y":540,"z":60.886792452830186},"PosB":{"x":-2040,"y":545,"z":35},"cost":7.5,"type":1},{"PolyA":62,"PolyB":106,"PosA":{"x":-1850,"y":540,"z":59.45283018867924},"PosB":{"x":-1850,"y":545,"z":106},"cost":7.5,"type":1},{"PolyA":95,"PolyB":107,"PosA":{"x":-1750,"y":2835,"z":33.53333333333333},"PosB":{"x":-1745,"y":2835,"z":65},"cost":7.5,"type":1},{"PolyA":129,"PolyB":173,"PosA":{"x":-1755,"y`
-+`":-315,"z":157.875},"PosB":{"x":-1755,"y":-320,"z":129},"cost":7.5,"type":1},{"PolyA":156,"PolyB":337,"PosA":{"x":-1040,"y":-620,"z":127.125},"PosB":{"x":-1040,"y":-615,"z":166},"cost":7.5,"type":1},{"PolyA":269,"PolyB":306,"PosA":{"x":-1160,"y":2130,"z":3},"PosB":{"x":-1160,"y":2125,"z":39},"cost":7.5,"type":1},{"PolyA":367,"PolyB":368,"PosA":{"x":-665,"y":245,"z":8},"PosB":{"x":-665,"y":240,"z":56},"cost":7.5,"type":1},{"PolyA":525,"PolyB":547,"PosA":{"x":140,"y":-165,"z":8.875},"PosB":{"x":14`
-+`0,"y":-160,"z":44},"cost":7.5,"type":1},{"PolyA":657,"PolyB":658,"PosA":{"x":605,"y":2330,"z":-20},"PosB":{"x":605,"y":2335,"z":28},"cost":7.5,"type":1},{"PolyA":206,"PolyB":232,"PosA":{"x":-1497.1611001964636,"y":1880.4911591355599,"z":0},"PosB":{"x":-1500,"y":1885,"z":25},"cost":7.992199045292164,"type":1},{"PolyA":239,"PolyB":240,"PosA":{"x":-1189.551724137931,"y":1149.6206896551723,"z":-12.96551724137931},"PosB":{"x":-1190,"y":1155,"z":32},"cost":8.096934285739788,"type":1},{"PolyA":623,"Pol`
-+`yB":733,"PosA":{"x":1054.488950276243,"y":2339.709944751381,"z":125},"PosB":{"x":1060,"y":2340,"z":99},"cost":8.278016216835386,"type":1},{"PolyA":44,"PolyB":54,"PosA":{"x":-2025.3846153846155,"y":2893.076923076923,"z":32.53846153846154},"PosB":{"x":-2030,"y":2890,"z":89},"cost":8.320502943378152,"type":1},{"PolyA":588,"PolyB":594,"PosA":{"x":364.61538461538464,"y":2706.923076923077,"z":104},"PosB":{"x":360,"y":2710,"z":130},"cost":8.320502943378296,"type":1},{"PolyA":128,"PolyB":174,"PosA":{"x"`
-+`:-1765,"y":-640,"z":158},"PosB":{"x":-1761.923076923077,"y":-644.6153846153846,"z":128.46153846153845},"cost":8.320502943378484,"type":1},{"PolyA":682,"PolyB":685,"PosA":{"x":754.6724137931035,"y":1109.4310344827586,"z":118},"PosB":{"x":755,"y":1115,"z":150},"cost":8.367888128084545,"type":1},{"PolyA":571,"PolyB":599,"PosA":{"x":434.62389380530976,"y":1964.358407079646,"z":96},"PosB":{"x":435,"y":1970,"z":132},"cost":8.48117384178122,"type":1},{"PolyA":704,"PolyB":710,"PosA":{"x":970.40609137055`
-+`83,"y":1139.3147208121827,"z":1},"PosB":{"x":970,"y":1145,"z":36},"cost":8.549645998549193,"type":1},{"PolyA":582,"PolyB":609,"PosA":{"x":544.8,"y":2623.6,"z":95},"PosB":{"x":540,"y":2620,"z":131},"cost":8.999999999999863,"type":1},{"PolyA":757,"PolyB":794,"PosA":{"x":1709.8,"y":2138.6,"z":2},"PosB":{"x":1705,"y":2135,"z":34},"cost":8.999999999999863,"type":1},{"PolyA":170,"PolyB":231,"PosA":{"x":-1573.5294117647059,"y":-190.88235294117646,"z":130},"PosB":{"x":-1575,"y":-185,"z":175},"cost":9.09`
-+`5085938862486,"type":1},{"PolyA":216,"PolyB":247,"PosA":{"x":-1480.9,"y":2661.3,"z":5.91},"PosB":{"x":-1480,"y":2655,"z":60},"cost":9.545941546018682,"type":1},{"PolyA":782,"PolyB":795,"PosA":{"x":1723.5135135135135,"y":1003.918918918919,"z":0.2972972972972973},"PosB":{"x":1730,"y":1005,"z":64},"cost":9.863939238321382,"type":1},{"PolyA":247,"PolyB":253,"PosA":{"x":-1461.4864864864865,"y":2646.0810810810813,"z":60},"PosB":{"x":-1455,"y":2645,"z":107},"cost":9.863939238321437,"type":1},{"PolyA":6`
-+`36,"PolyB":658,"PosA":{"x":625,"y":2365,"z":65},"PosB":{"x":626.081081081081,"y":2358.5135135135133,"z":28},"cost":9.863939238321716,"type":1},{"PolyA":249,"PolyB":259,"PosA":{"x":-1405,"y":30,"z":61},"PosB":{"x":-1399,"y":33,"z":20},"cost":10.062305898749054,"type":1},{"PolyA":450,"PolyB":456,"PosA":{"x":-436.04046242774564,"y":2468.2369942196533,"z":-34.12138728323699},"PosB":{"x":-435,"y":2475,"z":-10},"cost":10.263859937140843,"type":1},{"PolyA":767,"PolyB":787,"PosA":{"x":1311.3461538461538`
-+`,"y":2358.269230769231,"z":23.653846153846153},"PosB":{"x":1310,"y":2365,"z":75},"cost":10.296097094754394,"type":1},{"PolyA":313,"PolyB":315,"PosA":{"x":-996.3461538461538,"y":-206.73076923076923,"z":128.34615384615384},"PosB":{"x":-995,"y":-200,"z":145},"cost":10.296097094754645,"type":1},{"PolyA":448,"PolyB":449,"PosA":{"x":-468.65384615384613,"y":-151.73076923076923,"z":69},"PosB":{"x":-470,"y":-145,"z":107},"cost":10.29609709475466,"type":1},{"PolyA":245,"PolyB":261,"PosA":{"x":-1331.730769`
-+`2307693,"y":1183.6538461538462,"z":33},"PosB":{"x":-1325,"y":1185,"z":69},"cost":10.296097094754728,"type":1},{"PolyA":470,"PolyB":549,"PosA":{"x":163.65384615384616,"y":-1156.7307692307693,"z":0},"PosB":{"x":165,"y":-1150,"z":40},"cost":10.296097094754735,"type":1},{"PolyA":254,"PolyB":296,"PosA":{"x":-1230,"y":2600,"z":101},"PosB":{"x":-1225,"y":2595,"z":65},"cost":10.606601717798213,"type":1},{"PolyA":277,"PolyB":353,"PosA":{"x":-830,"y":2420,"z":-67},"PosB":{"x":-825,"y":2415,"z":-81},"cost"`
-+`:10.606601717798213,"type":1},{"PolyA":613,"PolyB":640,"PosA":{"x":790,"y":2460,"z":138},"PosB":{"x":795,"y":2465,"z":96},"cost":10.606601717798213,"type":1},{"PolyA":697,"PolyB":708,"PosA":{"x":845,"y":2730,"z":120},"PosB":{"x":850,"y":2735,"z":142},"cost":10.606601717798213,"type":1},{"PolyA":180,"PolyB":228,"PosA":{"x":-1633.7232059645853,"y":1891.1323392357874,"z":-0.3662628145386766},"PosB":{"x":-1630,"y":1885,"z":45},"cost":10.761164254130591,"type":1},{"PolyA":453,"PolyB":458,"PosA":{"x":`
-+`-330,"y":2500,"z":-18},"PosB":{"x":-327.92452830188677,"y":2507.264150943396,"z":26},"cost":11.332246525766656,"type":1},{"PolyA":663,"PolyB":679,"PosA":{"x":707.3360655737705,"y":2364.3032786885246,"z":4.467213114754099},"PosB":{"x":715,"y":2365,"z":22},"cost":11.543307620421096,"type":1},{"PolyA":744,"PolyB":779,"PosA":{"x":1275,"y":770,"z":30},"PosB":{"x":1282.5,"y":772.5,"z":-8.5},"cost":11.858541225631422,"type":1},{"PolyA":109,"PolyB":111,"PosA":{"x":-1764.3908629441623,"y":2433.5279187817`
-+`26,"z":64.29441624365482},"PosB":{"x":-1765,"y":2425,"z":102},"cost":12.824468997823809,"type":1},{"PolyA":635,"PolyB":646,"PosA":{"x":555,"y":2580,"z":137},"PosB":{"x":559.4117647058823,"y":2587.3529411764707,"z":96},"cost":12.86239388568831,"type":1},{"PolyA":610,"PolyB":737,"PosA":{"x":1263.7462039045554,"y":2540.182212581345,"z":125.74924078091107},"PosB":{"x":1255,"y":2540,"z":170},"cost":13.122152619556584,"type":1},{"PolyA":575,"PolyB":617,"PosA":{"x":521,"y":2433,"z":96},"PosB":{"x":525,`
-+`"y":2425,"z":125},"cost":13.416407864998739,"type":1},{"PolyA":779,"PolyB":791,"PosA":{"x":1587,"y":774,"z":-9.6},"PosB":{"x":1595,"y":770,"z":53},"cost":13.416407864998739,"type":1},{"PolyA":547,"PolyB":548,"PosA":{"x":155.75862068965517,"y":-94.10344827586206,"z":44},"PosB":{"x":155,"y":-85,"z":79},"cost":13.702504175867087,"type":1},{"PolyA":423,"PolyB":450,"PosA":{"x":-430.98194945848377,"y":2445.916967509025,"z":-89.45415162454874},"PosB":{"x":-430,"y":2455,"z":-33},"cost":13.70393497996181`
-+`5,"type":1},{"PolyA":161,"PolyB":162,"PosA":{"x":-1250,"y":-255,"z":128},"PosB":{"x":-1259,"y":-258,"z":149.6},"cost":14.230249470757707,"type":1},{"PolyA":353,"PolyB":394,"PosA":{"x":-595,"y":2545,"z":-84},"PosB":{"x":-585.4060913705583,"y":2544.3147208121827,"z":-21.593908629441625},"cost":14.427527622551775,"type":1},{"PolyA":660,"PolyB":661,"PosA":{"x":710,"y":-70,"z":41},"PosB":{"x":700.3846153846154,"y":-68.07692307692308,"z":56.38461538461539},"cost":14.708710135363841,"type":1},{"PolyA":`
-+`436,"PolyB":456,"PosA":{"x":-489.84615384615387,"y":2486.230769230769,"z":-20},"PosB":{"x":-480,"y":2485,"z":1},"cost":14.884168150705012,"type":1},{"PolyA":620,"PolyB":636,"PosA":{"x":560,"y":2400,"z":124},"PosB":{"x":560.7647058823529,"y":2390.0588235294117,"z":65},"cost":14.955817282523803,"type":1},{"PolyA":439,"PolyB":465,"PosA":{"x":-340,"y":-640,"z":138},"PosB":{"x":-339.74375821287776,"y":-649.9934296977661,"z":85.93561103810777},"cost":14.995071463642294,"type":1},{"PolyA":99,"PolyB":10`
-+`0,"PosA":{"x":-1930,"y":3030,"z":70.33333333333333},"PosB":{"x":-1920,"y":3030,"z":106},"cost":15,"type":1},{"PolyA":127,"PolyB":167,"PosA":{"x":-1420,"y":-150,"z":157},"PosB":{"x":-1420,"y":-160,"z":129.96666666666667},"cost":15,"type":1},{"PolyA":127,"PolyB":231,"PosA":{"x":-1575,"y":-150,"z":157},"PosB":{"x":-1575,"y":-160,"z":174},"cost":15,"type":1},{"PolyA":306,"PolyB":321,"PosA":{"x":-1135,"y":2065,"z":39},"PosB":{"x":-1125,"y":2065,"z":64},"cost":15,"type":1},{"PolyA":321,"PolyB":322,"Po`
-+`sA":{"x":-1105,"y":2120,"z":65},"PosB":{"x":-1105,"y":2130,"z":43},"cost":15,"type":1},{"PolyA":383,"PolyB":473,"PosA":{"x":-265,"y":780,"z":-2.0454545454545454},"PosB":{"x":-255,"y":780,"z":29},"cost":15,"type":1},{"PolyA":439,"PolyB":466,"PosA":{"x":-340,"y":-635,"z":138.5},"PosB":{"x":-330,"y":-635,"z":101},"cost":15,"type":1},{"PolyA":466,"PolyB":488,"PosA":{"x":-190,"y":-635,"z":102},"PosB":{"x":-180,"y":-635,"z":61},"cost":15,"type":1},{"PolyA":471,"PolyB":478,"PosA":{"x":-230,"y":1525,"z"`
-+`:30},"PosB":{"x":-220,"y":1525,"z":1},"cost":15,"type":1},{"PolyA":561,"PolyB":566,"PosA":{"x":420,"y":1650,"z":3},"PosB":{"x":410,"y":1650,"z":19},"cost":15,"type":1},{"PolyA":610,"PolyB":771,"PosA":{"x":1285,"y":2720,"z":124},"PosB":{"x":1295,"y":2720,"z":108},"cost":15,"type":1},{"PolyA":619,"PolyB":716,"PosA":{"x":1015,"y":2425,"z":125},"PosB":{"x":1015,"y":2435,"z":168},"cost":15,"type":1},{"PolyA":657,"PolyB":662,"PosA":{"x":635,"y":2305,"z":-12},"PosB":{"x":645,"y":2305,"z":-43},"cost":15`
-+`,"type":1},{"PolyA":658,"PolyB":663,"PosA":{"x":635,"y":2335,"z":28},"PosB":{"x":645,"y":2335,"z":-1},"cost":15,"type":1},{"PolyA":662,"PolyB":663,"PosA":{"x":645,"y":2325,"z":-43},"PosB":{"x":645,"y":2335,"z":-1},"cost":15,"type":1},{"PolyA":711,"PolyB":744,"PosA":{"x":1240,"y":335,"z":9.495145631067961},"PosB":{"x":1250,"y":335,"z":29},"cost":15,"type":1},{"PolyA":791,"PolyB":792,"PosA":{"x":1620,"y":720,"z":53},"PosB":{"x":1620,"y":710,"z":76},"cost":15,"type":1},{"PolyA":792,"PolyB":793,"Pos`
-+`A":{"x":1620,"y":335,"z":76},"PosB":{"x":1630,"y":335,"z":54.32258064516129},"cost":15,"type":1},{"PolyA":596,"PolyB":662,"PosA":{"x":710.2529668956902,"y":2289.8813241723924,"z":-63.47158026233604},"PosB":{"x":710,"y":2300,"z":-29},"cost":15.18275612982315,"type":1},{"PolyA":0,"PolyB":98,"PosA":{"x":-1860,"y":-945,"z":120},"PosB":{"x":-1859.71044045677,"y":-934.8654159869494,"z":151.2153344208809},"cost":15.208079601152022,"type":1},{"PolyA":464,"PolyB":472,"PosA":{"x":-265,"y":1470,"z":-29},"P`
-+`osB":{"x":-254.52618453865335,"y":1470.5236907730673,"z":29.14214463840399},"cost":15.730349337326071,"type":1},{"PolyA":261,"PolyB":297,"PosA":{"x":-1285.7586206896551,"y":1240.896551724138,"z":69.15172413793104},"PosB":{"x":-1275,"y":1240,"z":104},"cost":16.19386857147921,"type":1},{"PolyA":715,"PolyB":716,"PosA":{"x":1067.6470588235295,"y":2505.5882352941176,"z":152},"PosB":{"x":1065,"y":2495,"z":168},"cost":16.371154689952395,"type":1},{"PolyA":465,"PolyB":466,"PosA":{"x":-189.71419185282522`
-+`,"y":-646.146517739816,"z":48.23587385019711},"PosB":{"x":-190,"y":-635,"z":102},"cost":16.725272017139314,"type":1},{"PolyA":0,"PolyB":4,"PosA":{"x":-2120,"y":-1040,"z":128},"PosB":{"x":-2125,"y":-1050,"z":128},"cost":16.770509831248425,"type":0},{"PolyA":137,"PolyB":139,"PosA":{"x":-1490,"y":-105,"z":8},"PosB":{"x":-1480,"y":-110,"z":30},"cost":16.770509831248425,"type":1},{"PolyA":610,"PolyB":788,"PosA":{"x":1278.7871581450654,"y":2465.273483947681,"z":124.62128418549347},"PosB":{"x":1290,"y"`
-+`:2465,"z":60},"cost":16.824264793748874,"type":1},{"PolyA":609,"PolyB":635,"PosA":{"x":545,"y":2590,"z":131},"PosB":{"x":549,"y":2578,"z":137},"cost":18.973665961010276,"type":0},{"PolyA":110,"PolyB":126,"PosA":{"x":-1835,"y":2655,"z":78},"PosB":{"x":-1825,"y":2665,"z":77},"cost":21.213203435596427,"type":0},{"PolyA":657,"PolyB":663,"PosA":{"x":635,"y":2325,"z":-12},"PosB":{"x":645,"y":2335,"z":-1},"cost":21.213203435596427,"type":0},{"PolyA":295,"PolyB":323,"PosA":{"x":-1110,"y":2710,"z":87},"P`
-+`osB":{"x":-1095,"y":2710,"z":139},"cost":22.5,"type":1},{"PolyA":361,"PolyB":363,"PosA":{"x":-430,"y":-1030,"z":128},"PosB":{"x":-430,"y":-1015,"z":107.57894736842105},"cost":22.5,"type":1},{"PolyA":663,"PolyB":677,"PosA":{"x":710,"y":2335,"z":5},"PosB":{"x":725,"y":2335,"z":-55.09090909090909},"cost":22.5,"type":1},{"PolyA":107,"PolyB":151,"PosA":{"x":-1744.4622968778529,"y":2795.20996896111,"z":65},"PosB":{"x":-1760,"y":2795,"z":77},"cost":23.308682649870512,"type":0},{"PolyA":394,"PolyB":436,`
-+`"PosA":{"x":-515.4,"y":2527.8,"z":6.12},"PosB":{"x":-500,"y":2525,"z":-20},"cost":23.478713763747805,"type":1},{"PolyA":144,"PolyB":259,"PosA":{"x":-1357.1951219512196,"y":85.2439024390244,"z":8},"PosB":{"x":-1370,"y":75,"z":20},"cost":24.5973674974554,"type":0},{"PolyA":0,"PolyB":104,"PosA":{"x":-1860,"y":-945,"z":120},"PosB":{"x":-1845,"y":-935,"z":120},"cost":27.04163456597992,"type":0},{"PolyA":372,"PolyB":463,"PosA":{"x":-332.4703087885986,"y":288.36104513064134,"z":0},"PosB":{"x":-320,"y":`
-+`275,"z":3},"cost":27.414572559107604,"type":0},{"PolyA":231,"PolyB":233,"PosA":{"x":-1575,"y":-185,"z":175},"PosB":{"x":-1557,"y":-191,"z":175},"cost":28.460498941515414,"type":0},{"PolyA":789,"PolyB":790,"PosA":{"x":1315,"y":2835,"z":165},"PosB":{"x":1335,"y":2835,"z":159},"cost":30,"type":0},{"PolyA":394,"PolyB":395,"PosA":{"x":-585,"y":2550,"z":-22},"PosB":{"x":-580,"y":2570,"z":-85},"cost":30.923292192132458,"type":1},{"PolyA":353,"PolyB":395,"PosA":{"x":-605,"y":2570,"z":-84},"PosB":{"x":-5`
-+`85,"y":2580,"z":-84.5},"cost":33.54101966249685,"type":0},{"PolyA":573,"PolyB":617,"PosA":{"x":520,"y":2065,"z":96},"PosB":{"x":544.9944320712694,"y":2065.3730512249444,"z":125.0011135857461},"cost":37.49582382091243,"type":1},{"PolyA":282,"PolyB":346,"PosA":{"x":-835,"y":2580,"z":-77.42857142857143},"PosB":{"x":-835,"y":2605,"z":-76},"cost":37.5,"type":0},{"PolyA":346,"PolyB":357,"PosA":{"x":-815,"y":2605,"z":-79},"PosB":{"x":-790,"y":2605,"z":-79},"cost":37.5,"type":0},{"PolyA":354,"PolyB":357`
-+`,"PosA":{"x":-791.2443438914027,"y":2578.868778280543,"z":-82.22624434389141},"PosB":{"x":-790,"y":2605,"z":-79},"cost":39.24124826774542,"type":0},{"PolyA":293,"PolyB":295,"PosA":{"x":-1085,"y":2570,"z":32},"PosB":{"x":-1110,"y":2585,"z":46},"cost":43.73213921133976,"type":1},{"PolyA":365,"PolyB":366,"PosA":{"x":-725,"y":500,"z":9.894736842105264},"PosB":{"x":-725,"y":470,"z":24},"cost":45,"type":1},{"PolyA":396,"PolyB":455,"PosA":{"x":-390,"y":2545,"z":-86},"PosB":{"x":-390,"y":2515,"z":-21},"`
-+`cost":45,"type":1}]}`;
+        while (polyid < polyPath.length &&!this._pointInPolyXY(pos, polyPath[polyid].id))polyid++;
+
+        if (polyid >= polyPath.length) return;
+        const h = this._getHeightOnDetail(polyPath[polyid].id, pos);
+        out.push({
+            pos: { x: pos.x, y: pos.y, z: h },
+            mode: 1
+        });
+    }
+    /**
+     * @param {{pos:{x:number,y:number,z:number},mode:number}[]} funnelPath
+     * @param {{id:number,mode:number}[]} polyPath
+     */
+    fixHeight(funnelPath,polyPath) {
+        if (funnelPath.length === 0) return [];
+
+        const result = [];
+        let polyIndex = 0;
+
+        for (let i = 0; i < funnelPath.length - 1; i++) {
+            const curr = funnelPath[i];
+            const next = funnelPath[i + 1];
+
+            // 跳点：直接输出，不插值
+            if (next.mode == 2) {
+                result.push(curr);
+                continue;
+            }
+            if(curr.mode == 2)result.push(curr);
+            // 分段采样
+            const samples = this._subdivide(curr.pos, next.pos);
+            let preh=curr.pos.z;
+            let prep=curr;
+            for (let j = (curr.mode == 2)?1:0; j < samples.length; j++) {
+                const p = samples[j];
+                // 跳过重复首点
+                //if (result.length > 0) {
+                //    const last = result[result.length - 1].pos;
+                //    if (posDistance2Dsqr(last, p) < 1e-4) continue;
+                //}
+                const preid=polyIndex;
+                // 推进 poly corridor
+                while (polyIndex < polyPath.length &&!this._pointInPolyXY(p, polyPath[polyIndex].id))polyIndex++;
+
+                if (polyIndex >= polyPath.length) break;
+                //如果这个样本点比前一个点高度发生足够变化，就在中间加入一个样本点
+                const h = this._getHeightOnDetail(polyPath[polyIndex].id, p);
+                if(j>0&&Math.abs(preh-h)>5)
+                {
+                    const mid={x:(p.x+prep.pos.x)/2,y:(p.y+prep.pos.y)/2,z:p.z};
+                    this.addpoint(mid,preid,polyPath,result);
+                }
+                result.push({
+                    pos: { x: p.x, y: p.y, z: h },
+                    mode: 1
+                });
+                preh=h;
+                prep=result[result.length - 1];
+            }
+        }
+
+        // 最后一个点
+        result.push(funnelPath[funnelPath.length - 1]);
+        return result;
+    }
+
+    /* ===============================
+       Subdivide
+    =============================== */
+
+    /**
+     * @param {{ x: any; y: any; z: any; }} a
+     * @param {{ x: any; y: any; z?: number; }} b
+     */
+    _subdivide(a, b) {
+        const out = [];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist <= this.stepSize) {
+            out.push(a);
+            return out;
+        }
+
+        const n = Math.floor(dist / this.stepSize);
+        for (let i = 0; i < n; i++) {
+            const t = i / n;
+            out.push({
+                x: a.x + dx * t,
+                y: a.y + dy * t,
+                z: a.z
+            });
+        }
+        return out;
+    }
+
+    /* ===============================
+       Height Query
+    =============================== */
+
+    /**
+     * @param {number} polyId
+     * @param {{ z: number; y: number; x: number; }} p
+     */
+    _getHeightOnDetail(polyId, p) {
+        const { verts, tris } = this.detailMesh;
+        const start = this.polyTriStart[polyId];
+        const end   = this.polyTriEnd[polyId];
+        if(this.polyHasDetail[polyId]==0)return p.z;
+        const px = p.x;
+        const py = p.y;
+        for (let i = start; i < end; i++) {
+            if (
+                px < this.triAabbMinX[i] || px > this.triAabbMaxX[i] ||
+                py < this.triAabbMinY[i] || py > this.triAabbMaxY[i]
+            ) {
+                continue;
+            }
+            const [a, b, c] = tris[i];
+            const va = verts[a];
+            const vb = verts[b];
+            const vc = verts[c];
+
+            if (this._pointInTriXY(p, va, vb, vc)) {
+                return this._baryHeight(p, va, vb, vc);
+            }
+        }
+
+        // fallback（极少发生）
+    return p.z;
+    }
+
+    /**
+     * @param {{ x: number; y: number; }} p
+     * @param {{ x: any; y: any; z: any; }} a
+     * @param {{ x: any; y: any; z: any; }} b
+     * @param {{ x: any; y: any; z: any; }} c
+     */
+    _baryHeight(p, a, b, c) {
+        const v0x = b.x - a.x, v0y = b.y - a.y;
+        const v1x = c.x - a.x, v1y = c.y - a.y;
+        const v2x = p.x - a.x, v2y = p.y - a.y;
+
+        const d00 = v0x * v0x + v0y * v0y;
+        const d01 = v0x * v1x + v0y * v1y;
+        const d11 = v1x * v1x + v1y * v1y;
+        const d20 = v2x * v0x + v2y * v0y;
+        const d21 = v2x * v1x + v2y * v1y;
+
+        const denom = d00 * d11 - d01 * d01;
+        const v = (d11 * d20 - d01 * d21) / denom;
+        const w = (d00 * d21 - d01 * d20) / denom;
+        const u = 1.0 - v - w;
+
+        return u * a.z + v * b.z + w * c.z;
+    }
+
+    /* ===============================
+       Geometry helpers
+    =============================== */
+
+    /**
+     * @param {{ y: number; x: number; }} p
+     * @param {number} polyId
+     */
+    _pointInPolyXY(p, polyId) {
+        const poly = this.navMesh.polys[polyId];
+        let inside = false;
+
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const vi = this.navMesh.verts[poly[i]];
+            const vj = this.navMesh.verts[poly[j]];
+
+            if (
+                ((vi.y > p.y) !== (vj.y > p.y)) &&
+                (p.x < (vj.x - vi.x) * (p.y - vi.y) / (vj.y - vi.y) + vi.x)
+            ) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    /**
+     * @param {{ y: number; x: number; }} p
+     * @param {{ x: number; y: number;}} a
+     * @param {{ x: number; y: number;}} b
+     * @param {{ x: number; y: number;}} c
+     */
+    _pointInTriXY(p, a, b, c) {
+        const s = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
+        const t = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        const u = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
+        return (s >= 0 && t >= 0 && u >= 0) || (s <= 0 && t <= 0 && u <= 0);
     }
 }
 
@@ -894,10 +4468,12 @@ class NavMesh {
         this.astar;
         /**@type {{verts: {x: number;y: number;z: number;}[];polys: number[][];regions: number[];neighbors: number[][];}} */
         this.mesh;
-        /**@type {{verts: {x: number;y: number;z: number;}[];tris:number[][];meshes: number[][];}} */
+        /**@type {{verts: {x: number;y: number;z: number;}[];tris:number[][];triTopoly:number[];meshes: number[][];}} */
         this.meshdetail;
         /**@type {FunnelPath} */
         this.funnel;
+        /**@type {FunnelHeightFixer} */
+        this.heightfixer;
         /**@type {{ PolyA: number; PolyB: number; PosA: { x: number; y: number; z: number; }; PosB: { x: number; y: number; z: number; }; cost: number;type: number; }[]} */
         this.links;
         /** @type {number[]}*/
@@ -911,12 +4487,11 @@ class NavMesh {
      * @param {number} [duration]
      */
     debug(duration = 5) {
-        this.debugLoad(30);
     }
     debugLoad(duration = 5) {
         for (let pi = 0; pi < this.mesh.polys.length; pi++) {
             const poly = this.mesh.polys[pi];
-            const color = {r:255,g:255,b:0};
+            const color = {r:255,g:0,b:0};
             for (let i = 0; i < poly.length; i++) {
                 const start = this.mesh.verts[poly[i]];
                 const end = this.mesh.verts[poly[(i + 1) % poly.length]];
@@ -954,8 +4529,14 @@ class NavMesh {
             y: Math.round(v.y * 100) / 100,
             z: Math.round(v.z * 100) / 100
         }));
+        this.meshdetail.verts=this.meshdetail.verts.map(v => ({
+            x: Math.round(v.x * 100) / 100,
+            y: Math.round(v.y * 100) / 100,
+            z: Math.round(v.z * 100) / 100
+        }));
         const data = {
             mesh: this.mesh,           // 包含 verts, polys, regions, neighbors
+            meshdetail: this.meshdetail,
             links: this.jumplinkbuilder ? this.jumplinkbuilder.links : [],
         };
 
@@ -980,6 +4561,7 @@ class NavMesh {
             // 1. 恢复核心网格数据
             this.mesh = data.mesh;
             this.links=data.links;
+            this.meshdetail=data.meshdetail;
             Instance.Msg(`导航数据加载成功！多边形数量: ${this.mesh.polys.length}`);
             return true;
         } catch (e) {
@@ -988,11 +4570,58 @@ class NavMesh {
         }
     }
     init() {
-        this.importNavData(new StaticData().Data);
+        {
+            let start = new Date();
+            //创建世界网格
+            this.hf = new OpenHeightfield();
+            this.hf.init();
+            this.hf.findcanwalk();
+            this.hf.deleteboundary();
+            let end = new Date();
+            Instance.Msg(`网格生成完成,耗时${end.getTime() - start.getTime()}ms`);
+            //return;
+            //分割区域
+            start = new Date();
+            this.regionGen = new RegionGenerator(this.hf);
+            this.regionGen.init();
+            end = new Date();
+            Instance.Msg(`区域生成完成,耗时${end.getTime() - start.getTime()}ms`);
+            //return;
+            //轮廓生成
+            start = new Date();
+            this.contourBuilder = new ContourBuilder(this.hf);
+            this.contourBuilder.init();
+            end = new Date();
+            Instance.Msg(`轮廓生成完成,耗时${end.getTime() - start.getTime()}ms`);
+            //return;
+            //生成多边形网格
+            start = new Date();
+            this.polyMeshGenerator = new PolyMeshBuilder(this.contourBuilder.contours);
+            this.polyMeshGenerator.init();
+            this.mesh = this.polyMeshGenerator.return();
+            end = new Date();
+            Instance.Msg(`多边形生成完成,耗时${end.getTime() - start.getTime()}ms`);
+            //return;
+
+            //构建细节网格
+            start = new Date();
+            this.polidetail = new PolyMeshDetailBuilder(this.mesh, this.hf);
+            this.meshdetail = this.polidetail.init();
+            end = new Date();
+            Instance.Msg(`细节多边形生成完成,耗时${end.getTime() - start.getTime()}ms`);
+
+            //return;
+            start = new Date();
+            this.jumplinkbuilder=new JumpLinkBuilder(this.mesh);
+            this.links=this.jumplinkbuilder.init();
+            end = new Date();
+            Instance.Msg(`跳点生成完成,耗时${end.getTime() - start.getTime()}ms`);
+        }
 
         //构建A*寻路
         this.astar = new PolyGraphAStar(this.mesh,this.links);
         this.funnel = new FunnelPath(this.mesh, this.astar.centers,this.links);
+        this.heightfixer=new FunnelHeightFixer(this.mesh,this.meshdetail,ADJUST_HEIGHT_DISTANCE);
     }
     /**
      * 输入起点终点，返回世界坐标路径点
@@ -1004,104 +4633,63 @@ class NavMesh {
         const polyPath=this.astar.findPath(start,end);
 
         if (!polyPath || polyPath.length === 0) return [];
-
-        const ans = this.funnel.build(polyPath, start, end);
-        // 用 detail mesh 修正高度
-        //for (const p of ans) {
-        //    const poly = this.findContainingPoly(p);
-        //    if (poly >= 0) {
-        //        p.z = this.getHeightOnPolyDetail(poly, p.x, p.y);
-        //    }
-        //}
-        this.debugDrawPolyPath(polyPath, 1 / 2);
+        const funnelPath = this.funnel.build(polyPath, start, end);
+        const ans=this.heightfixer.fixHeight(funnelPath,polyPath);
+        //this.debugDrawPolyPath(polyPath, 1 / 2);
+        this.debugDrawfunnelPath(funnelPath,1/2);
         this.debugDrawPath(ans,1/2);
+
+        //无后台
+        //多边形总数：1025跳点数：162
+        //100次A*           68ms
+        //100次funnelPath   74ms-68=6ms
+        //100次fixHeight    82ms-74=8ms
         return ans;
     }
     /**
-     * @param {number} polyIndex
-     * @param {number} x
-     * @param {number} y
+     * @param {{pos:{x:number,y:number,z:number},mode:number}[]} path
      */
-    getHeightOnPolyDetail(polyIndex, x, y) {
-        const [vbase, vcount, tbase, tcount] = this.meshdetail.meshes[polyIndex];
-
-        for (let i = 0; i < tcount; i++) {
-            const tri = this.meshdetail.tris[tbase + i];
-
-            const a = this.meshdetail.verts[tri[0]];
-            const b = this.meshdetail.verts[tri[1]];
-            const c = this.meshdetail.verts[tri[2]];
-
-            if (this.pointInTri2D(x, y, a, b, c)) {
-                return this.baryZ(x, y, a, b, c);
-            }
+    debugDrawfunnelPath(path, duration = 10) {
+        if (!path || path.length < 2) {
+            Instance.Msg("No path to draw");
+            return;
         }
+        const color = {
+            r: Math.floor(0),
+            g: Math.floor(255),
+            b: Math.floor(0),
+        };
+        const colorJ = {
+            r: Math.floor(0),
+            g: Math.floor(255),
+            b: Math.floor(255),
+        };
 
-        const center = this.polyCenter(polyIndex);
-        return center.z;
-    }
-    /**
-     * @param {number} pi
-     */
-    polyCenter(pi) {
-        const poly = this.mesh.polys[pi];
-        let x = 0, y = 0, z = 0;
+        const last = path[0].pos;
+        Instance.DebugSphere({
+            center: { x: last.x, y: last.y, z: last.z },
+            radius: 3,
+            color: { r: 255, g: 0, b: 0 },
+            duration
+        });
+        for (let i = 1; i < path.length; i++) {
+            const a = path[i-1].pos;
+            const b = path[i].pos;
 
-        for (const vi of poly) {
-            const v = this.mesh.verts[vi];
-            x += v.x;
-            y += v.y;
-            z += v.z;
+            Instance.DebugLine({
+                start: { x: a.x, y: a.y, z: a.z },
+                end: { x: b.x, y: b.y, z: b.z },
+                color:path[i].mode==2?colorJ:color,
+                duration
+            });
+
+            Instance.DebugSphere({
+                center: { x: b.x, y: b.y, z: b.z },
+                radius: 3,
+                color:path[i].mode==2?colorJ:color,
+                duration
+            });
         }
-
-        const n = poly.length;
-        return { x: x / n, y: y / n, z: z / n };
-    }
-    /**
-     * @param {number} px
-     * @param {number} py
-     * @param {{ x: number; y: number; z: number; }} a
-     * @param {{ x: number; y: number; z: number; }} b
-     * @param {{ x: number; y: number; z: number; }} c
-     */
-    pointInTri2D(px, py, a, b, c) {
-        const area = (/** @type {{ x: number; y: number; z: number; }} */ p, /** @type {{ x: number; y: number; z: number; }} */ q, /** @type {{ x: number; y: number; }} */ r) =>
-            (q.x - p.x) * (r.y - p.y) -
-            (q.y - p.y) * (r.x - p.x);
-
-        const p = { x: px, y: py };
-        const ab = area(a, b, p);
-        const bc = area(b, c, p);
-        const ca = area(c, a, p);
-
-        return ab >= 0 && bc >= 0 && ca >= 0;
-    }
-    /**
-     * @param {number} px
-     * @param {number} py
-     * @param {{ x: number; y: number; z: number; }} a
-     * @param {{ x: number; y: number; z: number; }} b
-     * @param {{ x: number; y: number; z: number; }} c
-     */
-    baryZ(px, py, a, b, c) {
-        const v0x = b.x - a.x, v0y = b.y - a.y;
-        const v1x = c.x - a.x, v1y = c.y - a.y;
-        const v2x = px - a.x, v2y = py - a.y;
-
-        const d00 = v0x * v0x + v0y * v0y;
-        const d01 = v0x * v1x + v0y * v1y;
-        const d11 = v1x * v1x + v1y * v1y;
-        const d20 = v2x * v0x + v2y * v0y;
-        const d21 = v2x * v1x + v2y * v1y;
-
-        const denom = d00 * d11 - d01 * d01;
-        if (denom === 0) return a.z;
-
-        const v = (d11 * d20 - d01 * d21) / denom;
-        const w = (d00 * d21 - d01 * d20) / denom;
-        const u = 1 - v - w;
-
-        return u * a.z + v * b.z + w * c.z;
     }
     /**
      * @param {{pos:{x:number,y:number,z:number},mode:number}[]} path
@@ -1217,81 +4805,6 @@ class NavMesh {
                 }
             prev = center;
         }
-    }
-    /**
-     * @param {{left:{x:number,y:number,z:number},right:{x:number,y:number,z:number}}[]} portals
-     */
-    debugDrawPortals(portals, duration = 10) {
-        if (!portals) return;
-
-        for (let i = 0; i < portals.length; i++) {
-            const { left, right } = portals[i];
-
-            Instance.DebugLine({
-                start: { x: left.x, y: left.y, z: left.z },
-                end: { x: right.x, y: right.y, z: right.z },
-                color: { r: 0, g: 180, b: 255 },
-                duration
-            });
-
-            Instance.DebugSphere({
-                center: { x: left.x, y: left.y, z: left.z },
-                radius: 5,
-                color: { r: 0, g: 255, b: 255 },
-                duration
-            });
-            Instance.DebugSphere({
-                center: { x: right.x, y: right.y, z: right.z },
-                radius: 5,
-                color: { r: 255, g: 0, b: 255 },
-                duration
-            });
-        }
-    }
-    /**
-     * @param {{left:{x:number,y:number,z:number},right:{x:number,y:number,z:number}}[]} portals
-     * @param {import("cs_script/point_script").Vector} start
-     * @param {import("cs_script/point_script").Vector} end
-     */
-    debugDrawFunnel(portals, start, end, duration = 10) {
-        let prevL = start;
-        let prevR = start;
-
-        for (const p of portals) {
-            const l = p.left;
-            const r = p.right;
-
-            Instance.DebugLine({
-                start: { x: prevL.x, y: prevL.y, z: prevL.z },
-                end: { x: l.x, y: l.y, z: l.z },
-                color: { r: 0, g: 255, b: 0 },
-                duration
-            });
-
-            Instance.DebugLine({
-                start: { x: prevR.x, y: prevR.y, z: prevR.z },
-                end: { x: r.x, y: r.y, z: r.z },
-                color: { r: 255, g: 0, b: 0 },
-                duration
-            });
-
-            prevL = l;
-            prevR = r;
-        }
-
-        Instance.DebugLine({
-            start: { x: prevL.x, y: prevL.y, z: prevL.z },
-            end: { x: end.x, y: end.y, z: end.z },
-            color: { r: 0, g: 255, b: 0 },
-            duration
-        });
-
-        Instance.DebugLine({
-            start: { x: prevR.x, y: prevR.y, z: prevR.z },
-            end: { x: end.x, y: end.y, z: end.z },
-            color: { r: 255, g: 0, b: 0 },
-            duration
-        });
     }
 
     testinit() {
@@ -1462,7 +4975,7 @@ Instance.SetThink(() => {
 Instance.SetNextThink(Instance.GetGameTime()+1/2);
 Instance.OnBulletImpact((event)=>{
     end=event.position;
-    pathfinder.findPath(start,end);
+    //pathfinder.findPath(start,end);
     //pathfinder.findPath(start,end);
 });
 Instance.OnPlayerChat((event) => {

@@ -20,7 +20,7 @@ export class FunnelPath {
             this.links.get(polyA)?.push(link);
             this.links.get(polyB)?.push(link);
         }
-        Instance.Msg(this.links.size);
+        //Instance.Msg(this.links.size);
     }
     //返回pA到pB的跳点
     /**
