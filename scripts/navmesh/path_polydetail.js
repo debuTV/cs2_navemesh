@@ -1,7 +1,8 @@
 import { Instance } from "cs_script/point_script";
-import { POLY_DETAIL_SAMPLE_DIST, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, origin, pointInTri, POLY_DETAIL_HEIGHT_ERROR, AGENT_HEIGHT, isConvex, distPtSegSq, posDistance2Dsqr } from "./path_const";
+import { POLY_DETAIL_SAMPLE_DIST, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, origin, pointInTri, POLY_DETAIL_HEIGHT_ERROR, isConvex, distPtSegSq } from "./path_const";
 import { OpenHeightfield } from "./path_openheightfield";
 import { OpenSpan } from "./path_openspan";
+import { vec } from "../util/vector";
 
 export class PolyMeshDetailBuilder {
     /**
@@ -549,16 +550,16 @@ class SimplifiedCDT {
                     if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
                     if (distPtSegSq(poly[verts[j]], prev, next) == 0) //判断点p是否在ab线段上
                     {
-                        if (posDistance2Dsqr(prev, poly[verts[j]]) == 0 || posDistance2Dsqr(next, poly[verts[j]]) == 0) continue;
+                        if (vec.length2D(prev, poly[verts[j]]) == 0 || vec.length2D(next, poly[verts[j]]) == 0) continue;
                         contains = true;
                         break;
                     }
                 }
                 if (contains) continue;
                 const perimeter = 
-                Math.sqrt(posDistance2Dsqr(prev, cur)) +
-                Math.sqrt(posDistance2Dsqr(cur, next)) +
-                Math.sqrt(posDistance2Dsqr(next, prev));
+                vec.length2D(prev, cur) +
+                vec.length2D(cur, next) +
+                vec.length2D(next, prev);
             
                 // 找到周长最短的耳朵
                 if (perimeter < minPerimeter) {

@@ -1,110 +1,10 @@
 import { Instance } from 'cs_script/point_script';
 
-//==============================世界相关设置=====================================
-const origin = { x: -2250, y: -1200, z: -200 };
-//==============================Recast设置======================================
-//体素化参数
-const MESH_CELL_SIZE_XY = 5;                               // 体素大小
-const MESH_CELL_SIZE_Z = 1;                                // 体素高度
-const MESH_WORLD_SIZE_XY = 4500;                           // 世界大小
-const MESH_WORLD_SIZE_Z = 480;                             // 世界高度
-const MESH_ERODE_RADIUS = 0;                               // 腐蚀半径，如果一个区域应该不能被走到，但优化1未去除，可以增加此值
-const MESH_HOLE_FILLING = 0;                               // 有些时候莫名其妙有空洞，这时候可以自动填洞,数值越高，越有可能填中
-//区域生成参数
-const REGION_MERGE_AREA = 1024;                            // 合并区域阈值（体素单位）
-const REGION_MIN_AREA = 16;                                // 最小区域面积（体素单位）
-//轮廓生成参数
-const CONT_MAX_ERROR = MESH_CELL_SIZE_XY * 1.2;            // 原始点到简化后边的最大允许偏离距离（长度）
-const POLY_MAX_VERTS_PER_POLY = 6;                         // 每个多边形的最大顶点数
-const POLY_MERGE_LONGEST_EDGE_FIRST = true;                // 优先合并最长边
-const POLY_DETAIL_SAMPLE_DIST = 3;                         // 构建细节网格时，相邻采样点之间的“间距”,选3耗时比较合适
-const POLY_DETAIL_HEIGHT_ERROR = 5;                        // 构建细节网格时，采样点和计算点之差如果小于这个高度阈值就跳过
-//其他参数
-const MAX_WALK_HEIGHT = 13 / MESH_CELL_SIZE_Z;             // 怪物最大可行走高度（体素单位）
-const MAX_JUMP_HEIGHT = 64 / MESH_CELL_SIZE_Z;             // 怪物最大可跳跃高度（体素单位）
-const AGENT_HEIGHT = 72 / MESH_CELL_SIZE_Z;                // 人物高度（体素单位）
 const ASTAR_HEURISTIC_SCALE = 1.2;                         //A*推荐数值
 //Funnel参数
 const FUNNEL_DISTANCE = 25;                                //拉直的路径距离边缘多远(0-100，百分比，100%意味着只能走边的中点)
 //高度修正参数
-const ADJUST_HEIGHT_DISTANCE = 200;                        //路径中每隔这个距离增加一个点，用于修正高度
-/**
- * 计算空间两点之间的距离的平方
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @returns {number}
- */
-function posDistance3Dsqr(a, b) {
-    const dx = a.x - b.x; const dy = a.y - b.y; const dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
-}
-
-/**
- * 计算xy平面两点之间的距离的平方
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @returns {number}
- */
-function posDistance2Dsqr(a, b) {
-    const dx = a.x - b.x; const dy = a.y - b.y;
-    return dx * dx + dy * dy;
-}
-/**
- * 返回pos上方height高度的点
- * @param {import("cs_script/point_script").Vector} pos
- * @param {number} height
- * @returns {import("cs_script/point_script").Vector}
- */
-function posZfly(pos, height) {
-    return { x: pos.x, y: pos.y, z: pos.z + height };
-}
-/**
- * 点p到线段ab距离的平方
- * @param {import("cs_script/point_script").Vector} p
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- */
-function distPtSegSq(p, a, b) {
-    // 向量 ab 和 ap
-    const abX = b.x - a.x;
-    const abY = b.y - a.y;
-    const apX = p.x - a.x;
-    const apY = p.y - a.y;
-
-    // 计算 ab 向量的平方长度
-    const abSq = abX * abX + abY * abY;
-
-    // 如果线段的起点和终点重合（abSq 为 0），直接计算点到起点的距离
-    if (abSq === 0) {
-        return apX * apX + apY * apY;
-    }
-
-    // 计算点p在ab上的投影 t
-    const t = (apX * abX + apY * abY) / abSq;
-
-    // 计算投影点的位置
-    let nearestX, nearestY;
-
-    if (t < 0) {
-        // 投影点在a点左侧，最近点是a
-        nearestX = a.x;
-        nearestY = a.y;
-    } else if (t > 1) {
-        // 投影点在b点右侧，最近点是b
-        nearestX = b.x;
-        nearestY = b.y;
-    } else {
-        // 投影点在线段上，最近点是投影点
-        nearestX = a.x + t * abX;
-        nearestY = a.y + t * abY;
-    }
-
-    // 计算点p到最近点的距离的平方
-    const dx = p.x - nearestX;
-    const dy = p.y - nearestY;
-
-    return dx * dx + dy * dy;
-}
+const ADJUST_HEIGHT_DISTANCE = 50;                        //路径中每隔这个距离增加一个点，用于修正高度
 /**
  * xy平面上点abc构成的三角形面积的两倍，>0表示ABC逆时针，<0表示顺时针
  * @param {import("cs_script/point_script").Vector} a
@@ -116,29 +16,6 @@ function area(a, b, c) {
     const ac = { x: c.x - a.x, y: c.y - a.y };
     const s2 = (ab.x * ac.y - ac.x * ab.y);
     return s2;
-}
-/**
- * 返回cur在多边形中是否是锐角
- * @param {import("cs_script/point_script").Vector} prev
- * @param {import("cs_script/point_script").Vector} cur
- * @param {import("cs_script/point_script").Vector} next
- */
-function isConvex(prev, cur, next) {
-    return area(prev, cur, next) > 0;
-}
-/**
- * xy平面上点p是否在abc构成的三角形内（不包括边上）
- * @param {import("cs_script/point_script").Vector} p
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @param {import("cs_script/point_script").Vector} c
- */
-function pointInTri(p, a, b, c) {
-    const ab = area(a, b, p);
-    const bc = area(b, c, p);
-    const ca = area(c, a, p);
-    //内轮廓与外轮廓那里会有顶点位置相同的时候
-    return ab > 0 && bc > 0 && ca > 0;
 }
 /**
  * 点到线段最近点
@@ -189,11 +66,14 @@ function closestPointOnPoly(pos, verts, poly) {
     // 1. 如果在多边形内部（XY），直接投影到平面
     if (pointInConvexPolyXY(pos, verts, poly)) {
         // 用平均高度（你也可以用平面方程）
-        let z = 0;
-        for (const vi of poly) z += verts[vi].z;
-        z /= poly.length;
+        let maxz = -Infinity,minz=Infinity;
+        for (const vi of poly)
+        {
+            maxz =Math.max(maxz,verts[vi].z);
+            minz =Math.min(minz,verts[vi].z);
+        }
 
-        return { x: pos.x, y: pos.y, z };
+        return { x: pos.x, y: pos.y, z:0,in:true};
     }
 
     // 2. 否则，找最近边
@@ -212,23 +92,271 @@ function closestPointOnPoly(pos, verts, poly) {
 
         if (d < bestDist) {
             bestDist = d;
-            best = c;
+            best = {x: c.x, y: c.y, z:c.z,in:false};
         }
     }
 
     return best;
 }
 
+class FunnelHeightFixer {
+    /**
+     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][]}} navMesh
+     * @param {{verts:{x:number,y:number,z:number}[], tris:number[][],meshes:number[][], triTopoly:number[]}} detailMesh
+     * @param {number} stepSize
+     */
+    constructor(navMesh, detailMesh, stepSize = 0.5) {
+        this.navMesh = navMesh;
+        this.detailMesh = detailMesh;
+        this.stepSize = stepSize;
+        const polyCount = detailMesh.meshes.length;
+        this.polyTriStart = new Uint16Array(polyCount);
+        this.polyTriEnd   = new Uint16Array(polyCount);
+        this.polyHasDetail = new Uint8Array(polyCount);
+        for (let i = 0; i < polyCount; i++) {
+            const mesh = detailMesh.meshes[i];
+            const baseTri  = mesh[2];
+            const triCount = mesh[3];
+            this.polyHasDetail[i] = (triCount > 0)?1:0;
+            this.polyTriStart[i] = baseTri;
+            this.polyTriEnd[i]   = baseTri + triCount; // [start, end)
+        }
+        this.triAabbMinX = [];
+        this.triAabbMinY = [];
+        this.triAabbMaxX = [];
+        this.triAabbMaxY = [];
+        const { verts, tris } = detailMesh;
+
+        for (let i = 0; i < tris.length; i++) {
+            const [ia, ib, ic] = tris[i];
+            const a = verts[ia];
+            const b = verts[ib];
+            const c = verts[ic];
+
+            const minX = Math.min(a.x, b.x, c.x);
+            const minY = Math.min(a.y, b.y, c.y);
+            const maxX = Math.max(a.x, b.x, c.x);
+            const maxY = Math.max(a.y, b.y, c.y);
+
+            this.triAabbMinX[i] = minX;
+            this.triAabbMinY[i] = minY;
+            this.triAabbMaxX[i] = maxX;
+            this.triAabbMaxY[i] = maxY;
+        }
+
+    }
+
+    /* ===============================
+       Public API
+    =============================== */
+    
+    /**
+     * @param {{ x: number; y: number; z: any; }} pos
+     * @param {number} polyid
+     * @param {{ id: number; mode: number; }[]} polyPath
+     * @param {{ pos: { x: number; y: number; z: number; }; mode: number; }[]} out
+     */
+    addpoint(pos,polyid,polyPath,out)
+    {
+        while (polyid < polyPath.length &&!this._pointInPolyXY(pos, polyPath[polyid].id))polyid++;
+
+        if (polyid >= polyPath.length) return;
+        const h = this._getHeightOnDetail(polyPath[polyid].id, pos);
+        out.push({
+            pos: { x: pos.x, y: pos.y, z: h },
+            mode: 1
+        });
+        //Instance.DebugSphere({center:{ x: pos.x, y: pos.y, z: h },radius:1,duration:1/32,color:{r:0,g:255,b:0}});
+                
+    }
+    /**
+     * @param {{pos:{x:number,y:number,z:number},mode:number}[]} funnelPath
+     * @param {{id:number,mode:number}[]} polyPath
+     */
+    fixHeight(funnelPath,polyPath) {
+        if (funnelPath.length === 0) return [];
+        const result = [];
+        let polyIndex = 0;
+
+        for (let i = 0; i < funnelPath.length - 1; i++) {
+            const curr = funnelPath[i];
+            const next = funnelPath[i + 1];
+
+            // 跳点：直接输出，不插值
+            if (next.mode == 2) {
+                result.push(curr);
+                continue;
+            }
+            if(curr.mode == 2)result.push(curr);
+            // 分段采样
+            const samples = this._subdivide(curr.pos, next.pos);
+            //Instance.Msg(samples.length);
+            let preh=curr.pos.z;
+            let prep=curr;
+            for (let j = (curr.mode == 2)?1:0; j < samples.length; j++) {
+                const p = samples[j];
+                // 跳过重复首点
+                //if (result.length > 0) {
+                //    const last = result[result.length - 1].pos;
+                //    if (posDistance2Dsqr(last, p) < 1e-4) continue;
+                //}
+                const preid=polyIndex;
+                // 推进 poly corridor
+                while (polyIndex < polyPath.length &&!this._pointInPolyXY(p, polyPath[polyIndex].id))polyIndex++;
+
+                if (polyIndex >= polyPath.length) break;
+                //如果这个样本点比前一个点高度发生足够变化，就在中间加入一个样本点
+                const h = this._getHeightOnDetail(polyPath[polyIndex].id, p);
+                if(j>0&&Math.abs(preh-h)>5)
+                {
+                    const mid={x:(p.x+prep.pos.x)/2,y:(p.y+prep.pos.y)/2,z:p.z};
+                    this.addpoint(mid,preid,polyPath,result);
+                }
+                result.push({
+                    pos: { x: p.x, y: p.y, z: h },
+                    mode: 1
+                });
+                //Instance.DebugSphere({center:{ x: p.x, y: p.y, z: h },radius:1,duration:1/32,color:{r:255,g:0,b:0}});
+                preh=h;
+                prep=result[result.length - 1];
+            }
+        }
+        // 最后一个点
+        ////result.push(funnelPath[funnelPath.length - 1]);
+        //删除起点和终点
+        return result.slice(1,result.length);
+    }
+
+    /* ===============================
+       Subdivide
+    =============================== */
+
+    /**
+     * @param {{ x: any; y: any; z: any; }} a
+     * @param {{ x: any; y: any; z?: number; }} b
+     */
+    _subdivide(a, b) {
+        const out = [];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist <= this.stepSize) {
+            out.push(a);
+            return out;
+        }
+
+        const n = Math.floor(dist / this.stepSize);
+        for (let i = 0; i < n; i++) {
+            const t = i / n;
+            out.push({
+                x: a.x + dx * t,
+                y: a.y + dy * t,
+                z: a.z
+            });
+        }
+        return out;
+    }
+
+    /* ===============================
+       Height Query
+    =============================== */
+
+    /**
+     * @param {number} polyId
+     * @param {{ z: number; y: number; x: number; }} p
+     */
+    _getHeightOnDetail(polyId, p) {
+        const { verts, tris } = this.detailMesh;
+        const start = this.polyTriStart[polyId];
+        const end   = this.polyTriEnd[polyId];
+        if(this.polyHasDetail[polyId]==0)return p.z;
+        const px = p.x;
+        const py = p.y;
+        for (let i = start; i < end; i++) {
+            if (
+                px < this.triAabbMinX[i] || px > this.triAabbMaxX[i] ||
+                py < this.triAabbMinY[i] || py > this.triAabbMaxY[i]
+            ) {
+                continue;
+            }
+            const [a, b, c] = tris[i];
+            const va = verts[a];
+            const vb = verts[b];
+            const vc = verts[c];
+
+            if (this._pointInTriXY(p, va, vb, vc)) {
+                return this._baryHeight(p, va, vb, vc);
+            }
+        }
+
+        // fallback（极少发生）
+    return p.z;
+    }
+
+    /**
+     * @param {{ x: number; y: number; }} p
+     * @param {{ x: any; y: any; z: any; }} a
+     * @param {{ x: any; y: any; z: any; }} b
+     * @param {{ x: any; y: any; z: any; }} c
+     */
+    _baryHeight(p, a, b, c) {
+        const v0x = b.x - a.x, v0y = b.y - a.y;
+        const v1x = c.x - a.x, v1y = c.y - a.y;
+        const v2x = p.x - a.x, v2y = p.y - a.y;
+
+        const d00 = v0x * v0x + v0y * v0y;
+        const d01 = v0x * v1x + v0y * v1y;
+        const d11 = v1x * v1x + v1y * v1y;
+        const d20 = v2x * v0x + v2y * v0y;
+        const d21 = v2x * v1x + v2y * v1y;
+
+        const denom = d00 * d11 - d01 * d01;
+        const v = (d11 * d20 - d01 * d21) / denom;
+        const w = (d00 * d21 - d01 * d20) / denom;
+        const u = 1.0 - v - w;
+
+        return u * a.z + v * b.z + w * c.z;
+    }
+
+    /* ===============================
+       Geometry helpers
+    =============================== */
+
+    /**
+     * @param {{ y: number; x: number; z:0}} p
+     * @param {number} polyId
+     */
+    _pointInPolyXY(p, polyId) {
+        const poly = this.navMesh.polys[polyId];
+        return pointInConvexPolyXY(p,this.navMesh.verts,poly);
+    }
+    /**
+     * @param {{ y: number; x: number; }} p
+     * @param {{ x: number; y: number;}} a
+     * @param {{ x: number; y: number;}} b
+     * @param {{ x: number; y: number;}} c
+     */
+    _pointInTriXY(p, a, b, c) {
+        const s = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
+        const t = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        const u = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
+        return (s >= 0 && t >= 0 && u >= 0) || (s <= 0 && t <= 0 && u <= 0);
+    }
+}
+
 class PolyGraphAStar {
     /**
      * @param {{verts: {x: number;y: number;z: number;}[];polys: number[][];regions: number[];neighbors: number[][];}} polys
-     * @param {{ PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number; type: number; }[]} links
+     * @param {{PolyA: number;PolyB: number;PosA: import("cs_script/point_script").Vector;PosB: import("cs_script/point_script").Vector;cost: number;type: number;}[]} links
+     * @param {FunnelHeightFixer} heightfixer
      */
-    constructor(polys, links) {
+    constructor(polys, links, heightfixer) {
         this.mesh = polys;
         this.polyCount = polys.polys.length;
         /**@type {Map<number,{PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number; type: number;}[]>} */
         this.links = new Map();
+        this.heightfixer = heightfixer;
         for (const link of links) {
             const polyA = link.PolyA;
             const polyB = link.PolyB;
@@ -267,19 +395,18 @@ class PolyGraphAStar {
      * @param {import("cs_script/point_script").Vector} end
      */
     findPath(start, end) {
-        const startPoly = this.findContainingPoly(start);
-        const endPoly = this.findContainingPoly(end);
-
-        //Instance.Msg(startPoly+"   "+endPoly);
-        if (startPoly < 0 || endPoly < 0) {
+        const startPoly = this.findNearestPoly(start);
+        const endPoly = this.findNearestPoly(end);
+        //Instance.Msg(startPoly.poly+"   "+endPoly.poly);
+        if (startPoly.poly < 0 || endPoly.poly < 0) {
             Instance.Msg(`跑那里去了?`);
-            return [];
+            return { start: startPoly.pos, end: endPoly.pos, path: [] };
         }
 
         if (startPoly == endPoly) {
-            return [{ id: endPoly, mode: 1 }];
+            return { start: startPoly.pos, end: endPoly.pos, path: [{ id: endPoly.poly, mode: 1 }] };
         }
-        return this.findPolyPath(startPoly, endPoly);
+        return { start: startPoly.pos, end: endPoly.pos, path: this.findPolyPath(startPoly.poly, endPoly.poly) };
     }
     buildSpatialIndex() {
         for (let i = 0; i < this.mesh.polys.length; i++) {
@@ -312,30 +439,44 @@ class PolyGraphAStar {
      * 返回包含点的 poly index，找不到返回 -1
      * @param {{x:number,y:number,z:number}} p
      */
-    findContainingPoly(p) {
+    findNearestPoly(p) {
         let bestPoly = -1;
         let bestDist = Infinity;
+        let bestPos = p;
         const x = Math.floor(p.x / this.spatialCellSize);
         const y = Math.floor(p.y / this.spatialCellSize);
-        const key = `${x}_${y}`;
-        const candidates = this.spatialGrid.get(key);
-        if (!candidates) return -1;
-        for (const polyIdx of candidates) {
-            const poly = this.mesh.polys[polyIdx];
-            const cp = closestPointOnPoly(p, this.mesh.verts, poly);
-            if (!cp) continue;
+        for (let i = -1; i <= 1; i++) {
+            for (let j = -1; j <= 1; j++) {
+                const key = `${x + i}_${y + j}`;
+                //const key = `${x}_${y}`;
+                const candidates = this.spatialGrid.get(key);
+                if (!candidates) continue;
+                //if (!candidates) return{pos:bestPos,poly:bestPoly};
+                for (const polyIdx of candidates) {
+                    const poly = this.mesh.polys[polyIdx];
+                    const cp = closestPointOnPoly(p, this.mesh.verts, poly);
+                    if (!cp) continue;
 
-            const dx = cp.x - p.x;
-            const dy = cp.y - p.y;
-            const dz = cp.z - p.z;
-            const d = dx * dx + dy * dy + dz * dz;
+                    if (cp.in == true) {
+                        const h = this.heightfixer._getHeightOnDetail(polyIdx, p);
+                        cp.z = h;
+                    }
+                    //Instance.DebugSphere({center:{x:cp.x,y:cp.y,z:cp.z},radius:2,duration:1,color:{r:255,g:0,b:0}});
+                    const dx = cp.x - p.x;
+                    const dy = cp.y - p.y;
+                    const dz = cp.z - p.z;
+                    const d = dx * dx + dy * dy + dz * dz;
 
-            if (d < bestDist) {
-                bestDist = d;
-                bestPoly = polyIdx;
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestPoly = polyIdx;
+                        bestPos = cp;
+                    }
+                }
             }
         }
-        return bestPoly;
+
+        return { pos: bestPos, poly: bestPoly };
     }
     /**
      * @param {number} start
@@ -363,8 +504,8 @@ class PolyGraphAStar {
 
             if (current === end) return this.reconstruct(parent, walkMode, end);
             state[current] = 2;
-            
-            const hToTarget=this.distsqr(current, end);
+
+            const hToTarget = this.distsqr(current, end);
             if (hToTarget < minH) {
                 minH = hToTarget;
                 closestNode = current;
@@ -411,7 +552,7 @@ class PolyGraphAStar {
                 }
             }
         }
-        return this.reconstruct(parent,walkMode, closestNode);
+        return this.reconstruct(parent, walkMode, closestNode);
     }
     /**
      * @param {Int32Array} parent
@@ -805,3648 +946,522 @@ class FunnelPath {
 
 }
 
-class OpenSpan {
-    /**
-     * @param {number} floor
-     * @param {number} ceiling
-     * @param {number} id
-     */
-    constructor(floor, ceiling, id) {
-        /**@type {number} */
-        this.floor = floor;
-        /**@type {number} */
-        this.ceiling = ceiling;
-        /**@type {OpenSpan|null} */
-        this.next = null;
-        /**@type {number} */
-        this.id = id;
-
-        /**@type {any[]} */
-        this.neighbors = [null, null, null, null];
-        /**@type {number} */
-        this.distance = 0;
-        /**@type {number} */
-        this.regionId = 0;
-
-        //区域距离场优化
-        this.newDist = 0;
-        //是否在使用
-        this.use=true;
-    }
-
-    /**
-     * @param {OpenSpan} other
-     * @param {number} maxStep
-     * @param {number} agentHeight
-     * @returns {boolean}
-     */
-    canTraverseTo(other, maxStep = MAX_WALK_HEIGHT, agentHeight = AGENT_HEIGHT) {
-        if(!other.use)return false;
-        if (Math.abs(other.floor - this.floor) > maxStep) {
-            return false;
-        }
-
-        const floor = Math.max(this.floor, other.floor);
-        const ceil = Math.min(this.ceiling, other.ceiling);
-
-        if (ceil - floor < agentHeight) {
-            return false;
-        }
-
-        return true;
-    }
-}
-
-class OpenHeightfield {
-    constructor() {
-
-        /**@type {(OpenSpan | null)[][]}*/
-        this.cells = [];
-        /**@type {boolean[][][]}*/
-        this.precells = [];
-        this.SPAN_ID = 1;
-        /**@type {number} */
-        this.gridX = Math.floor(MESH_WORLD_SIZE_XY / MESH_CELL_SIZE_XY) + 1;
-        /**@type {number} */
-        this.gridY = Math.floor(MESH_WORLD_SIZE_XY / MESH_CELL_SIZE_XY) + 1;
-        /**@type {number} */
-        this.gridZ = Math.floor(MESH_WORLD_SIZE_Z / MESH_CELL_SIZE_Z) + 1;
-    }
-    init() {
-        const minZ = origin.z;
-        const maxZ = origin.z + MESH_WORLD_SIZE_Z;
-
-        for (let x = 0; x < this.gridX; x++) {
-            this.cells[x] = [];
-            for (let y = 0; y < this.gridY; y++) {
-                const worldX = origin.x + x * MESH_CELL_SIZE_XY;
-                const worldY = origin.y + y * MESH_CELL_SIZE_XY;
-
-                this.cells[x][y] = this.voxelizeColumn(worldX, worldY, minZ, maxZ);
-            }
-        }
-        this.erode(MESH_ERODE_RADIUS);
-    }
-
-    /**
-     * @param {number} wx
-     * @param {number} wy
-     * @param {number} minZ
-     * @param {number} maxZ
-     */
-    voxelizeColumn(wx, wy, minZ, maxZ) {
-        let head = null;
-        let currentZ = maxZ;
-        const radius = MESH_CELL_SIZE_XY / 2+ MESH_HOLE_FILLING;
-
-        while (currentZ >= minZ + radius) {
-            //寻找地板 (floor)
-            const downStart = { x: wx, y: wy, z: currentZ };
-            const downEnd = { x: wx, y: wy, z: minZ };
-            const downTr = Instance.TraceSphere({ radius, start: downStart, end: downEnd, ignorePlayers: true });
-
-            if (!downTr || !downTr.didHit) break; // 下面没东西了，结束
-
-            const floorZ = downTr.end.z - radius;
-
-            //从地板向上寻找天花板 (ceiling)
-            const upStart = { x: wx, y: wy, z: downTr.end.z + 1 };
-            const upEnd = { x: wx, y: wy, z: maxZ };
-            const upTr = Instance.TraceSphere({ radius, start: upStart, end: upEnd, ignorePlayers: true });
-
-            let ceilingZ = maxZ;
-            if (upTr.didHit) ceilingZ = upTr.end.z + radius;
-
-            const floor = Math.round((floorZ - origin.z) / MESH_CELL_SIZE_Z);
-            const ceiling = Math.round((ceilingZ - origin.z) / MESH_CELL_SIZE_Z);
-
-            if ((ceiling - floor) >= AGENT_HEIGHT) {
-                const newSpan = new OpenSpan(floor, ceiling, this.SPAN_ID++);
-
-                if (!head || floor < head.floor) {
-                    newSpan.next = head;
-                    head = newSpan;
-                } else {
-                    let curr = head;
-                    while (curr.next && curr.next.floor < floor) {
-                        curr = curr.next;
-                    }
-                    newSpan.next = curr.next;
-                    curr.next = newSpan;
-                }
-            }
-
-            currentZ = floorZ - radius - 1;
-        }
-
-        return head;
-    }
-    //筛选不能去的区域
-    findcanwalk() {
-        const slist = Instance.FindEntitiesByClass("info_target");
-        /**@type {Entity|undefined} */
-        let s;
-        slist.forEach((i) => {
-            if (i.GetEntityName() == "navmesh") {
-                s = i;
-                return;
-            }
-        });
-        if (!s) return;
-        const dirs = [
-            { dx: -1, dy: 0 },
-            { dx: 0, dy: 1 },
-            { dx: 1, dy: 0 },
-            { dx: 0, dy: -1 }
-        ];
-        let vis = Array(this.SPAN_ID + 5).fill(false);
-        const centerPos = s.GetAbsOrigin();
-        const cx = Math.ceil((centerPos.x - origin.x) / MESH_CELL_SIZE_XY);
-        const cy = Math.ceil((centerPos.y - origin.y) / MESH_CELL_SIZE_XY);
-        const cz = Math.ceil((centerPos.z - origin.z) / MESH_CELL_SIZE_Z) + 2;
-        /**@type {OpenSpan|null} */
-        let startSpan = this.cells[cx][cy];
-        while (startSpan) {
-            if (startSpan.use&&cz <= startSpan.ceiling && cz >= startSpan.floor) break;
-            startSpan = startSpan.next;
-        }
-        if (!startSpan) return;
-        let queue = [{ span: startSpan, i: cx, j: cy }];
-        vis[startSpan.id] = true;
-        while (queue.length > 0) {
-            let currentSpan = queue.shift();
-            if (!currentSpan) break;
-            for (let dir = 0; dir < 4; dir++) {
-                const nx = currentSpan.i + dirs[dir].dx;
-                const ny = currentSpan.j + dirs[dir].dy;
-                if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
-                /**@type {OpenSpan|null} */
-                let neighbor = this.cells[nx][ny];
-                while (neighbor) {
-                    if(neighbor.use)
-                    {
-                        if (!vis[neighbor.id]) {
-                            // 检查是否可以通过
-                            if (currentSpan.span.canTraverseTo(neighbor, MAX_JUMP_HEIGHT, AGENT_HEIGHT)) {
-                                vis[neighbor.id] = true;
-                                queue.push({ span: neighbor, i: nx, j: ny });
-                            }
-                        }
-                    }
-                    neighbor = neighbor.next;
-                }
-            }
-        }
-        // 遍历所有的cell
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                //let prevSpan = null;
-                /**@type {OpenSpan|null} */
-                let currentSpan = this.cells[i][j];
-                while (currentSpan) {
-                    if(currentSpan.use)
-                    {
-                        if (!vis[currentSpan.id]) {
-                            // 如果当前span不可达，则删除它
-                            currentSpan.use=false;
-                            //if (prevSpan) {
-                            //    // 如果有前驱节点，跳过当前节点
-                            //    prevSpan.next = currentSpan.next;
-                            //} else {
-                            //    // 如果没有前驱节点，说明是链表的第一个节点，直接修改
-                            //    this.cells[i][j] = currentSpan.next;
-                            //}
-                        } //else {
-                            // 如果当前span是可达的，更新prevSpan
-                           // prevSpan = currentSpan;
-                        //}
-                        // 继续遍历下一个span
-                    }
-                    currentSpan = currentSpan.next;
-                }
-            }
-        }
-    }
-    /**
-     * 根据半径腐蚀可行走区域
-     * @param {number} radius
-     */
-    erode(radius) {
-        if (radius <= 0) return;
-
-        // 1. 初始化距离场，默认给一个很大的值
-        // 使用 Uint16Array 节省内存，索引为 span.id
-        const distances = new Uint16Array(this.SPAN_ID + 1).fill(65535);
-        const dirs = [{ dx: -1, dy: 0 }, { dx: 0, dy: 1 }, { dx: 1, dy: 0 }, { dx: 0, dy: -1 }];
-
-        // 2. 标记边界点（距离为 0）
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                let span = this.cells[i][j];
-                while (span) {
-                    if(span.use)
-                    {
-                        let isBoundary = false;
-                        for (let d = 0; d < 4; d++) {
-                            const nx = i + dirs[d].dx;
-                            const ny = j + dirs[d].dy;
-
-                            // 触碰地图边界或没有邻居，即为边界
-                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) {
-                                isBoundary = true;
-                                break;
-                            }
-
-                            let hasNeighbor = false;
-                            let nspan = this.cells[nx][ny];
-                            while (nspan) {
-                                if(nspan.use)
-                                {
-                                    if (span.canTraverseTo(nspan,MAX_JUMP_HEIGHT,AGENT_HEIGHT)) {
-                                        hasNeighbor = true;
-                                        break;
-                                    }
-                                }
-                                nspan = nspan.next;
-                            }
-
-                            if (!hasNeighbor) {
-                                isBoundary = true;
-                                break;
-                            }
-                        }
-
-                        if (isBoundary) distances[span.id] = 0;
-                    }
-                    span = span.next;
-                }
-            }
-        }
-
-        // 3. 两次遍历计算精确距离场 (Pass 1: Top-Left to Bottom-Right)
-        this._passDist(distances, true);
-        // (Pass 2: Bottom-Right to Top-Left)
-        this._passDist(distances, false);
-
-        // 4. 根据 AGENT_RADIUS 删除不合格的 Span
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                //let prevSpan = null;
-                let currentSpan = this.cells[i][j];
-                while (currentSpan) {
-                    if(currentSpan.use)
-                    {
-                        // 如果距离边界太近，则剔除
-                        if (distances[currentSpan.id] < radius) {
-                            currentSpan.use=false;
-                            //if (prevSpan) prevSpan.next = currentSpan.next;
-                            //else this.cells[i][j] = currentSpan.next;
-                        } //else {
-                        //  prevSpan = currentSpan;
-                        //}
-                    }
-                    currentSpan = currentSpan.next;
-                }
-            }
-        }
-    }
-
-    /**
-     * 内部辅助：距离场传递
-     * @param {Uint16Array<ArrayBuffer>} distances
-     * @param {boolean} forward
-     */
-    _passDist(distances, forward) {
-        const dirs = [{ dx: -1, dy: 0 }, { dx: 0, dy: 1 }, { dx: 1, dy: 0 }, { dx: 0, dy: -1 }];
-        const startX = forward ? 0 : this.gridX - 1;
-        const endX = forward ? this.gridX : -1;
-        const step = forward ? 1 : -1;
-
-        for (let i = startX; i !== endX; i += step) {
-            for (let j = forward ? 0 : this.gridY - 1; j !== (forward ? this.gridY : -1); j += step) {
-                let span = this.cells[i][j];
-                while (span) {
-                    if(span.use)
-                    {
-                        for (let d = 0; d < 4; d++) {
-                            const nx = i + dirs[d].dx;
-                            const ny = j + dirs[d].dy;
-                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
-
-                            let nspan = this.cells[nx][ny];
-                            while (nspan) {
-                                if(nspan.use)
-                                {
-                                    if (span.canTraverseTo(nspan,MAX_JUMP_HEIGHT,AGENT_HEIGHT)) {
-                                        // 核心公式：当前点距离 = min(当前距离, 邻居距离 + 1)
-                                        distances[span.id] = Math.min(distances[span.id], distances[nspan.id] + 1);
-                                    }
-                                }
-                                nspan = nspan.next;
-                            }
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-    }
-    deleteboundary() {
-        let boundary = Array(this.SPAN_ID + 5).fill(false);
-        const dirs = [
-            { dx: -1, dy: 0 },
-            { dx: 0, dy: 1 },
-            { dx: 1, dy: 0 },
-            { dx: 0, dy: -1 }
-        ];
-        // 遍历所有的cell
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                let neighbors = [false, false, false, false];
-                /**@type {OpenSpan|null} */
-                let span = this.cells[i][j];
-                while (span) {
-                    if(span.use)
-                    {
-                        for (let d = 0; d < 4; d++) {
-                            const nx = i + dirs[d].dx;
-                            const ny = j + dirs[d].dy;
-                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
-                            /**@type {OpenSpan|null} */
-                            let nspan = this.cells[nx][ny];
-                            while (nspan) {
-                                if(nspan.use)
-                                {
-                                    if (span.canTraverseTo(nspan)) {
-                                        neighbors[d] = true;
-                                    }
-                                }
-                                nspan = nspan.next;
-                            }
-                        }
-                        if (!(neighbors[0] && neighbors[1] && neighbors[2] && neighbors[3])) {
-                            boundary[span.id] = true;
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                //let prevSpan = null;
-                /**@type {OpenSpan|null} */
-                let currentSpan = this.cells[i][j];
-                while (currentSpan) {
-                    if(currentSpan.use)
-                    {
-                        if (boundary[currentSpan.id]) {
-                            currentSpan.use=false;
-                            //// 如果当前span不可达，则删除它
-                            //if (prevSpan) {
-                            //    // 如果有前驱节点，跳过当前节点
-                            //    prevSpan.next = currentSpan.next;
-                            //} else {
-                            //    // 如果没有前驱节点，说明是链表的第一个节点，直接修改
-                            //    this.cells[i][j] = currentSpan.next;
-                            //}
-                        }// else {
-                            // 如果当前span是可达的，更新prevSpan
-                         //   prevSpan = currentSpan;
-                        //}
-                        // 继续遍历下一个span
-                    }
-                    currentSpan = currentSpan.next;
-                }
-            }
-        }
-    }
-    deletealone() {
-        let del = Array(this.SPAN_ID + 5).fill(false);
-        const dirs = [
-            { dx: -1, dy: 0 },
-            { dx: 0, dy: 1 },
-            { dx: 1, dy: 0 },
-            { dx: 0, dy: -1 }
-        ];
-        // 遍历所有的cell
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                let neighbors = [false, false, false, false];
-                /**@type {OpenSpan|null} */
-                let span = this.cells[i][j];
-                while (span) {
-                    if(span.use)
-                    {
-                        for (let d = 0; d < 4; d++) {
-                            const nx = i + dirs[d].dx;
-                            const ny = j + dirs[d].dy;
-                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
-                            /**@type {OpenSpan|null} */
-                            let nspan = this.cells[nx][ny];
-                            while (nspan) {
-                                if(nspan.use)
-                                {
-                                    if (span.canTraverseTo(nspan)) {
-                                        neighbors[d] = true;
-                                    }
-                                }
-                                nspan = nspan.next;
-                            }
-                        }
-                        if ((neighbors[0] ? 1 : 0) + (neighbors[1] ? 1 : 0) + (neighbors[2] ? 1 : 0) + (neighbors[3] ? 1 : 0) <= 1) {
-                            del[span.id] = true;
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                /**@type {OpenSpan|null} */
-                let currentSpan = this.cells[i][j];
-                while (currentSpan) {
-                    if(currentSpan.use)
-                    {
-                        if (del[currentSpan.id]) {
-                            currentSpan.use=false;
-                            // 如果当前span不可达，则删除它
-                            //if (prevSpan) {
-                            //    // 如果有前驱节点，跳过当前节点
-                            //    prevSpan.next = currentSpan.next;
-                            //} else {
-                            //    // 如果没有前驱节点，说明是链表的第一个节点，直接修改
-                            //    this.cells[i][j] = currentSpan.next;
-                            //}
-                        } //else {
-                           // prevSpan = currentSpan;
-                        //}
-                    }
-                    currentSpan = currentSpan.next;
-                }
-            }
-        }
-    }
-    debug(duration = 30) {
-        for (let i = 0; i < this.gridX; i++) {
-            for (let j = 0; j < this.gridY; j++) {
-                /**@type {OpenSpan|null} */
-                let span = this.cells[i][j];
-                while (span) {
-                    if(span.use==true)
-                    {
-                        const c = {
-                            r: 255,
-                            g: 255,
-                            b: 0
-                        };
-                        Instance.DebugSphere({
-                            center: {
-                                x: origin.x + i * MESH_CELL_SIZE_XY,
-                                y: origin.y + j * MESH_CELL_SIZE_XY,
-                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
-                            },
-                            radius: 3,
-                            duration,
-                            color: c
-                        });
-                    }
-                    //Instance.DebugBox({ 
-                    //    mins: { 
-                    //        x: origin.x+i*MESH_CELL_SIZE_XY - MESH_CELL_SIZE_XY/2, 
-                    //        y: origin.y+j*MESH_CELL_SIZE_XY - MESH_CELL_SIZE_XY/2, 
-                    //        z: origin.z +span.floor*MESH_CELL_SIZE_Z
-                    //    },
-                    //    maxs: { 
-                    //        x: origin.x+i*MESH_CELL_SIZE_XY + MESH_CELL_SIZE_XY/2, 
-                    //        y: origin.y+j*MESH_CELL_SIZE_XY + MESH_CELL_SIZE_XY/2, 
-                    //        z: origin.z +span.floor*MESH_CELL_SIZE_Z+5
-                    //    }, 
-                    //    duration: duration, 
-                    //    color: c
-                    //});
-                    span = span.next;
-                }
-            }
-        }
-    }
-}
-
-class RegionGenerator {
-    /**
-     * @param {OpenHeightfield} openHeightfield
-     */
-    constructor(openHeightfield) {
-        /**@type {(OpenSpan|null)[][]} */
-        this.hf = openHeightfield.cells;
-        /**@type {number} */
-        this.gridX = openHeightfield.gridX;
-        /**@type {number} */
-        this.gridY = openHeightfield.gridY;
-        this.regions = [];
-        /**@type {number} */
-        this.nextRegionId = 1;
-    }
-
-    init() {
-        this.buildCompactNeighbors();
-        this.buildDistanceField();
-        this.buildRegionsWatershed();
-        this.mergeAndFilterRegions();
-    }
-    //为span建立邻居关系
-    buildCompactNeighbors() {
-        const dirs = [
-            { dx: -1, dy: 0 },
-            { dx: 0, dy: 1 },
-            { dx: 1, dy: 0 },
-            { dx: 0, dy: -1 }
-        ];
-
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        span.neighbors = [null, null, null, null];
-
-                        for (let d = 0; d < 4; d++) {
-                            const nx = x + dirs[d].dx;
-                            const ny = y + dirs[d].dy;
-                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
-
-                            let best = null;
-                            let bestDiff = Infinity;
-                            /**@type {OpenSpan|null} */
-                            let nspan = this.hf[nx][ny];
-
-                            while (nspan) {
-                                if(nspan.use)
-                                {
-                                    if (span.canTraverseTo(nspan)) {
-                                        const diff = Math.abs(span.floor - nspan.floor);
-                                        if (diff < bestDiff) {
-                                            best = nspan;
-                                            bestDiff = diff;
-                                        }
-                                    }
-                                }
-                                nspan = nspan.next;
-                            }
-
-                            span.neighbors[d] = best;
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-    }
-    /**
-     * 获取邻居。
-     * @param {OpenSpan} span 
-     * @param {number} dir 方向 (0:W, 1:N, 2:E, 3:S)
-     * @returns {OpenSpan|null}
-     */
-    getNeighbor(span, dir) {
-        return span.neighbors[dir];
-    }
-
-    /**
-     * 获取对角线邻居。
-     * 例如：西北 (NW) = 先向西(0)再向北(1)
-     * @param {OpenSpan} span 
-     * @param {number} dir1 
-     * @param {number} dir2 
-     */
-    getDiagonalNeighbor(span, dir1, dir2) {
-        const n = span.neighbors[dir1];
-        if (n) {
-            return n.neighbors[dir2];
-        }
-        return null;
-    }
-    //构建距离场
-    buildDistanceField() {
-        // 1. 初始化：边界设为0，内部设为无穷大
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        // 如果任意一个邻居缺失，说明是边界
-                        span.distance = this.isBorderSpan(span) ? 0 : Infinity;
-                    }
-                    span = span.next;
-                }
-            }
-        }
-
-        // 第一遍扫描：从左下到右上
-        // 西(0)、西南(0+3)、南(3)、东南(3+2)
-        for (let y = 0; y < this.gridY; y++) {
-            for (let x = 0; x < this.gridX; x++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.distance > 0) {
-                            // 西
-                            let n = this.getNeighbor(span, 0);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                            // 西南
-                            let nd = this.getDiagonalNeighbor(span, 0, 3);
-                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
-                            // 南
-                            n = this.getNeighbor(span, 3);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                            // 东南
-                            nd = this.getDiagonalNeighbor(span, 3, 2);
-                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-
-        // 第二遍扫描：从右上到左下
-        // 东(2)、东北(2+1)、北(1)、西北(1+0)
-        for (let y = this.gridY - 1; y >= 0; y--) {
-            for (let x = this.gridX - 1; x >= 0; x--) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.distance > 0) {
-                            // 东
-                            let n = this.getNeighbor(span, 2);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                            // 东北
-                            let nd = this.getDiagonalNeighbor(span, 2, 1);
-                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
-                            // 北
-                            n = this.getNeighbor(span, 1);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
-                            // 西北
-                            let nd2 = this.getDiagonalNeighbor(span, 1, 0);
-                            if (nd2) span.distance = Math.min(span.distance, nd2.distance + 3);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        this.blurDistanceField();
-    }
-    //对距离场进行平滑处理
-    blurDistanceField() {
-        const threshold = 2; //距离阈值，小于的不进行模糊
-
-        //计算模糊后的值
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        //只有远离边界的体素才参与模糊
-                        if (span.distance <= threshold) span.newDist = span.distance;
-                        else {
-                            let d = span.distance;
-                            //计算平均距离
-                            for (let i = 0; i < 4; i++) {
-                                const n = span.neighbors[i];
-                                if (n) d += n.distance;
-                                else d += span.distance;
-                            }
-                            span.newDist = Math.floor((d + 2) / 5);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.newDist !== undefined) {
-                            span.distance = span.newDist;
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-    }
-    /**
-     * 计算当前span从dir方向过来的距离
-     * @param {OpenSpan} span
-     * @param {number} dir
-     */
-    sample(span, dir) {
-        const n = span.neighbors[dir];
-        if (!n) return Infinity;
-
-        return n.distance + 2;
-    }
-
-    /**
-     * 是否是边界span
-     * @param {OpenSpan} span
-     */
-    isBorderSpan(span) {
-        for (let d = 0; d < 4; d++) {
-            if (!span.neighbors[d]) return true;
-        }
-        return false;
-    }
-
-    //洪水扩张
-    buildRegionsWatershed() {
-        const spans = [];
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        span.regionId = 0;
-                        if (span.distance >= 0) {
-                            spans.push(span);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        //从大到小排序
-        spans.sort((a, b) => b.distance - a.distance);
-
-        for (const span of spans) {
-
-            let bestRegion = 0;
-            let maxNeighborDist = -1;
-
-            for (let d = 0; d < 4; d++) {
-                const n = span.neighbors[d];
-                if (!n) continue;
-
-                //如果邻居已经有Region了，说明这个邻居比当前span更靠近“中心”
-
-                if (n.regionId > 0) {
-                    if (n.distance > maxNeighborDist) {
-                        maxNeighborDist = n.distance;
-                        bestRegion = n.regionId;
-                    }
-                }
-            }
-
-            if (bestRegion !== 0) span.regionId = bestRegion;
-            else span.regionId = this.nextRegionId++;
-        }
-        //this.floodRemaining();
-        //this.mergeAndFilterRegions();
-    }
-    //abandon
-    floodRemaining() {
-        //填补距离为0的边界缝隙
-        let changed = true;
-        let iterCount = 0;
-        while (changed && iterCount < 5) {
-            changed = false;
-            iterCount++;
-            for (let x = 0; x < this.gridX; x++) {
-                for (let y = 0; y < this.gridY; y++) {
-                    let span = this.hf[x][y];
-                    while (span) {
-                        if(span.use)
-                        {
-                            //如果当前没有区域
-                            if (span.regionId === 0) {
-                                let bestRegion = 0;
-                                let bestDist = -1;
-                                for (let d = 0; d < 4; d++) {
-                                    const n = span.neighbors[d];
-                                    if (n && n.regionId > 0) {
-                                        if (n.distance > bestDist) {
-                                            bestDist = n.distance;
-                                            bestRegion = n.regionId;
-                                        }
-                                    }
-                                }
-                                if (bestRegion > 0) {
-                                    span.regionId = bestRegion;
-                                    changed = true;
-                                }
-                            }
-                        }
-                        span = span.next;
-                    }
-                }
-            }
-        }
-    }
-
-    //合并过滤小region
-    mergeAndFilterRegions() {
-        /**@type {Map<number,OpenSpan[]>} */
-        const regionSpans = new Map();
-
-        //统计每个region包含的span
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.regionId > 0) {
-                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        //合并过小的region
-        for (const [id, spans] of regionSpans) {
-            if (spans.length >= REGION_MERGE_AREA) continue;
-            const neighbors = new Map();
-            for (const span of spans) {
-                for (let d = 0; d < 4; d++) {
-                    const n = span.neighbors[d];
-                    if (n && n.regionId !== id) {
-                        neighbors.set(
-                            n.regionId,
-                            (neighbors.get(n.regionId) ?? 0) + 1
-                        );
-                    }
-                }
-            }
-
-            let best = 0;
-            let bestCount = 0;
-            for (const [nid, count] of neighbors) {
-                if (count > bestCount) {
-                    best = nid;
-                    bestCount = count;
-                }
-            }
-
-            if (best > 0) {
-                for (const span of spans) {
-                    span.regionId = best;
-                    regionSpans.get(span.regionId)?.push(span);
-                }
-                regionSpans.set(id, []);
-            }
-        }
-        //统计每个region包含的span
-        regionSpans.clear();
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.regionId > 0) {
-                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        //忽略过小的region
-        for (const [id, spans] of regionSpans) {
-            if (spans.length >= REGION_MIN_AREA) continue;
-            for (const span of spans) {
-                if (span.regionId == id) span.regionId = 0;
-            }
-        }
-    }
-    //abandon
-    smooth() {
-        /**@type {Map<number,OpenSpan[]>} */
-        const regionSpans = new Map();
-        //统计每个region包含的span
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.regionId > 0) {
-                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        for (const [id, spans] of regionSpans) {
-            let smoth = true;
-            while (smoth) {
-                smoth = false;
-                let diff = 0;
-                let df = [];
-                outer:
-                for (const span of spans) {
-                    if (span.regionId != id) continue;
-                    for (let d = 0; d < 4; d++) {
-                        const n = span.neighbors[d];
-                        if (n && n.regionId !== id) {
-                            df[diff] = n.regionId;
-                            diff++;
-                        }
-                    }
-                    if (diff == 3) {
-                        //这个span周围有三个不同于自身的区域
-                        if (df[0] == df[1]) {
-                            span.regionId = df[0];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        else if (df[1] == df[2]) {
-                            span.regionId = df[1];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        else if (df[0] == df[2]) {
-                            span.regionId = df[0];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        else {
-                            //四个区域不相同加入旁边
-                            span.regionId = df[0];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        smoth = true;
-                        break outer;
-                    }
-                }
-            }
-        }
-    }
-    /**
-     * Debug: 绘制 Region（按 regionId 上色）
-     * @param {number} duration
-     */
-    debugDrawRegions(duration = 5) {
-        const colorCache = new Map();
-
-        const randomColor = (/** @type {number} */ id) => {
-            if (!colorCache.has(id)) {
-                colorCache.set(id, {
-                    r: (id * 97) % 255,
-                    g: (id * 57) % 255,
-                    b: (id * 17) % 255
-                });
-            }
-            return colorCache.get(id);
-        };
-
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.regionId > 0) {
-                            const c = randomColor(span.regionId);
-
-                            const center = {
-                                x: origin.x + (x + 0.5) * MESH_CELL_SIZE_XY,
-                                y: origin.y + (y + 0.5) * MESH_CELL_SIZE_XY,
-                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
-                            };
-
-                            Instance.DebugSphere({
-                                center,
-                                radius: MESH_CELL_SIZE_XY * 0.3,
-                                color: c,
-                                duration
-                            });
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-    }
-    /**
-     * Debug: 绘制 Distance Field（亮度 = 距离）
-     */
-    debugDrawDistance(duration = 5) {
-        let maxDist = 0;
-
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        maxDist = Math.max(maxDist, span.distance);
-                    }
-                    span = span.next;
-                }
-            }
-        }
-
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.distance < Infinity) {
-                            const t = span.distance / maxDist;
-                            const c = {
-                                r: Math.floor(255 * t),
-                                g: Math.floor(255 * (1 - t)),
-                                b: 0
-                            };
-
-                            Instance.DebugSphere({
-                                center: {
-                                    x: origin.x + x * MESH_CELL_SIZE_XY,
-                                    y: origin.y + y * MESH_CELL_SIZE_XY,
-                                    z: origin.z + span.floor * MESH_CELL_SIZE_Z
-                                },
-                                radius: MESH_CELL_SIZE_XY * 0.25,
-                                color: c,
-                                duration
-                            });
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-    }
-
-}
-
-class ContourBuilder {
-    /**
-     * @param {OpenHeightfield} hf
-     */
-    constructor(hf) {
-        /** @type {(OpenSpan|null)[][]} */
-        this.hf = hf.cells;
-        this.gridX = hf.gridX;
-        this.gridY = hf.gridY;
-
-        /** @type {Contour[][]} */
-        this.contours = [];
-        this.cornerHeightCache = new Map();
-    }
-
-    /**
-     * 边界边：没有邻居，或邻居 region 不同
-     * @param {OpenSpan} span
-     * @param {number} dir
-     */
-    isBoundaryEdge(span, dir) {
-        const n = span.neighbors[dir];
-        return !n || n.regionId !== span.regionId;
-    }
-    /**
-     * @param {OpenSpan} span
-     * @param {number} dir
-     */
-    getNeighborregionid(span, dir) {
-        const n = span.neighbors[dir];
-        if (n) return n.regionId;
-        else return 0;
-    }
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {OpenSpan} span
-     * @param {number} dir
-     */
-    edgeKey(x, y, span, dir) {
-        return `${x},${y},${span.id},${dir}`;
-    }
-
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {number} dir
-     */
-    move(x, y, dir) {
-        switch (dir) {
-            case 0: return { x: x - 1, y };
-            case 1: return { x, y: y + 1 };
-            case 2: return { x: x + 1, y };
-            case 3: return { x, y: y - 1 };
-        }
-        return { x, y };
-    }
-
-    /**
-     * dir对应的cell角点
-     * @param {number} x
-     * @param {number} y
-     * @param {number} dir
-     */
-    corner(x, y, dir) {
-        switch (dir) {
-            case 0: return { x, y };
-            case 1: return { x, y: y + 1 };
-            case 2: return { x: x + 1, y: y + 1 };
-            case 3: return { x: x + 1, y };
-        }
-        return { x, y };
-    }
-    /**
-     * 判断线段 (p1, p2) 和 (p3, p4) 是否相交
-     * @param {import("cs_script/point_script").Vector} p1
-     * @param {import("cs_script/point_script").Vector} p2
-     * @param {import("cs_script/point_script").Vector} p3
-     * @param {import("cs_script/point_script").Vector} p4
-     * @param {boolean} checkpoint //是否包含端点
-     */
-    segmentsIntersect(p1, p2, p3, p4, checkpoint) {
-        const crossProduct = (/** @type {{ x: any; y: any; z?: number; }} */ a, /** @type {{ x: any; y: any; z?: number; }} */ b, /** @type {{ x: any; y: any; z?: number; }} */ c) => (c.y - a.y) * (b.x - a.x) - (b.y - a.y) * (c.x - a.x);
-        // 快速排斥实验 + 跨立实验
-        const d1 = crossProduct(p1, p2, p3);
-        const d2 = crossProduct(p1, p2, p4);
-        const d3 = crossProduct(p3, p4, p1);
-        const d4 = crossProduct(p3, p4, p2);
-        if (checkpoint) return (d1 * d2 <= 0 && d3 * d4 <= 0);
-        return (d1 * d2 < 0 && d3 * d4 < 0);
-        //return (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
-    }
-    /**
-     * @param {Contour} holePt
-     * @param {Contour[]} outer
-     * @param {Contour[][]} holos
-     * @param {number} innerid
-     */
-    findBridgeOuterIndex(holePt, outer, holos, innerid) {
-        const inner = holos[innerid];
-        let bestDistsq = Infinity;
-        let bestIdx = -1;
-
-        for (let i = 0; i < outer.length; i++) {
-            const a = outer[i];
-            //1.计算距离
-            const dx = holePt.x - a.x;
-            const dy = holePt.y - a.y;
-            const distSq = dx * dx + dy * dy;
-
-            //2.如果比当前最好的还远，直接跳过
-            if (distSq >= bestDistsq) continue;
-            //3.桥连线(holePt -> outerPt)是否与外圈的任何一条边相交
-            let intersects = false;
-            for (let j = 0; j < outer.length; j++) {
-                const p1 = outer[j];
-                const p2 = outer[(j + 1) % outer.length];
-
-                if (j === i || (j + 1) % outer.length === i) continue;
-                if (this.segmentsIntersect(holePt, a, p1, p2, true)) {
-                    intersects = true;
-                    break;
-                }
-            }
-            if (intersects) continue;
-            //4.是否与内圈自身的边相交（处理洞的凹陷部分）
-            for (let j = 0; j < inner.length; j++) {
-                const p1 = inner[j];
-                const p2 = inner[(j + 1) % inner.length];
-                // 忽略包含起点 holePt 的两条边
-                if (p1 === holePt || p2 === holePt) continue;
-                if (this.segmentsIntersect(holePt, a, p1, p2, true)) {
-                    intersects = true;
-                    break;
-                }
-            }
-            if (intersects) continue;
-            //5.是否与剩下几个未合并的内轮廓边相交
-            for (let k = innerid + 1; k < holos.length; k++) {
-                for (let j = 0; j < holos[k].length; j++) {
-                    const p1 = holos[k][j];
-                    const p2 = holos[k][(j + 1) % holos[k].length];
-                    if (this.segmentsIntersect(holePt, a, p1, p2, true)) {
-                        intersects = true;
-                        break;
-                    }
-                }
-            }
-            if (!intersects) {
-                bestDistsq = distSq;
-                bestIdx = i;
-            }
-        }
-
-        return bestIdx;
-    }
-    /**
-     * @param {Contour[]} outer
-     * @param {Contour[][]} holes
-     * @param {number} holeid
-     */
-    mergeHoleIntoOuter(outer, holes, holeid) {
-        const hole = holes[holeid];
-        let oi = -1;
-        let holePt = hole[0];
-        let hi = 0;
-        for (hi = 0; hi < hole.length; hi++) {
-            holePt = hole[hi];
-            oi = this.findBridgeOuterIndex(holePt, outer, holes, holeid);
-            if (oi >= 0) break;
-        }
-        if (oi < 0) {
-            Instance.Msg("没有找到桥连接内外轮廓");
-            return outer;
-        }
-        /**@type {Contour[]} */
-        const merged = [];
-
-        // 1. outer → bridge 点
-        for (let i = 0; i <= oi; i++) {
-            merged.push(outer[i]);
-        }
-
-        // 2. bridge → hole 起点
-        merged.push(holePt);
-
-        // 3. 绕 hole 一圈（从 hi 开始到hole 起点及hi）
-        for (let i = 1; i <= hole.length; i++) {
-            merged.push(hole[(hi + i) % hole.length]);
-        }
-
-        // 4. 回到 outer bridge 点
-        merged.push(outer[oi]);
-
-        // 5. outer 剩余部分
-        for (let i = oi + 1; i < outer.length; i++) {
-            merged.push(outer[i]);
-        }
-
-        return merged;
-    }
-    mergeRegionContours() {
-        /**@type {Map<number,Contour[][]>} */
-        const byRegion = new Map();
-
-        //按region分组
-        for (const c of this.contours) {
-            const rid = c[0].regionId;
-            if (!byRegion.has(rid)) byRegion.set(rid, []);
-            byRegion.get(rid)?.push(c);
-        }
-
-        const mergedContours = [];
-
-        for (const [rid, contours] of byRegion) {
-            /**@type {Contour[]} */
-            let outer = [];
-            const holes = [];
-
-            for (const c of contours) {
-                if (this.computeSignedArea(c) > 0) {
-                    outer = c;
-                } else {
-                    holes.push(c);
-                }
-            }
-
-            if (!outer) continue;
-            //输出区域有几个内轮廓，和多边形生成时报错比较
-            //if(holes.length>0)
-            //{
-            //    Instance.Msg(rid+"=="+holes.length);
-            //}
-
-            //待更新：给hole排序，按某一坐标从小到大
-
-            //逐个把hole融进outer
-            for (let i = 0; i < holes.length; i++) {
-                outer = this.mergeHoleIntoOuter(outer, holes, i);
-            }
-            //outer=this.fixWinding(outer);
-            mergedContours.push(outer);
-        }
-
-        // 用融合后的结果替换
-        this.contours = mergedContours;
-    }
-
-    init() {
-        /** @type {Set<string>} */
-        const visited = new Set();
-
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.regionId > 0) {
-                            for (let dir = 0; dir < 4; dir++) {
-                                if (this.isBoundaryEdge(span, dir)) {
-
-                                    const key = this.edgeKey(x, y, span, dir);
-                                    if (visited.has(key)) continue;
-
-                                    let contour = this.traceContour(x, y, span, dir, visited);
-                                    if (contour && contour.length >= 3) {
-                                        //外轮廓：逆时针（CCW）
-                                        //洞轮廓：顺时针（CW）
-                                        contour.length;
-                                        contour = this.simplifyContour(contour);
-                                        if (contour && contour.length >= 3) {
-                                            this.contours.push(contour);
-                                            //Instance.Msg(`{${l}}=>{${contour.length}}`);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        this.mergeRegionContours();
-    }
-    /**
-     * @param {Contour[]} contour
-     */
-    simplifyContour(contour) {
-        const n = contour.length;
-        if (n < 4) return contour.slice();
-        const pts = contour.slice();
-        const locked = new Array(n).fill(0);
-        let locknum = 0;
-        for (let i = 0; i < n; i++) {
-            contour[(i + n - 1) % n];
-            const cur = contour[i];
-            const next = contour[(i + 1) % n];
-            // portal 端点,相邻的1相连
-            if (next.neighborRegionId != cur.neighborRegionId) {
-                locked[i] += 1;
-                locknum++;
-                //Instance.DebugSphere({center:cur,radius:8,duration:120,color:{r:255,g:0,b:0}});
-                //区域切换端点
-            }
-            //方向发生变化，相邻的2相连
-            //if (cur.neighborRegionId==0&&!isCollinear(cur,prev,next)) {
-            //    //Instance.DebugSphere({center:{x:cur.x,y:cur.y,z:cur.z+10},radius:8,duration:120,color:{r:0,g:255,b:0}});
-            //    //转弯端点
-            //    locked[i] += 2;
-            //}
-        }
-        if (locknum == 0) {
-            let minPt = pts[0];
-            let maxPt = pts[0];
-            let minid = 0;
-            let maxid = 0;
-            for (let i = 0; i < n; i++) {
-                const pt = pts[i];
-                if (pt.x < minPt.x || pt.y < minPt.y) {
-                    minPt = pt;
-                    minid = i;
-                }
-                if (pt.x > maxPt.x || pt.y > maxPt.y) {
-                    maxPt = pt;
-                    maxid = i;
-                }
-            }
-            //没有强制顶点，判断为四周都是边境，或者四周都是某一区域，手动指定两个强制顶点
-            locked[minid] = 1;
-            locked[maxid] = 1;
-        }
-        /**@type {Contour[]}*/
-        const out = [];
-        let i = 0;
-        let minI = -1;
-        let maxJ = n;
-        while (i < n - 1) {
-            if (locked[i] == 0) {
-                i++;
-                continue;
-            }
-            if (minI == -1) minI = i;
-            let j = (i + 1);
-            while (j < n - 1 && locked[j] == 0) {
-                j = j + 1;
-            }
-            if (locked[j]) maxJ = j;
-            /**
-             * @type {Contour[]}
-             */
-            if (locked[i] && locked[j]) this.simplifySegmentbymaxErrorSq(pts, locked, i, j, out);
-            i = j;
-        }
-        this.simplifySegmentbymaxErrorSqFinally(pts, locked, maxJ, minI, out, n);
-        return out;
-    }
-    /**
-     * @param {Contour[]} pts
-     * @param {number[]} locked
-     * @param {number} i0
-     * @param {number} i1
-     * @param {Contour[]} out
-     * @param {number}n
-     */
-    simplifySegmentbymaxErrorSqFinally(pts, locked, i0, i1, out, n) {
-        const a = pts[i0];
-        const b = pts[i1];
-        let maxDistSq = 0;
-        let index = -1;
-        for (let i = i0 + 1; i < n; i++) {
-            const d = distPtSegSq(pts[i], a, b);
-            if (d > maxDistSq) {
-                maxDistSq = d;
-                index = i;
-            }
-        }
-        for (let i = 0; i < i1; i++) {
-            const d = distPtSegSq(pts[i], a, b);
-            if (d > maxDistSq) {
-                maxDistSq = d;
-                index = i;
-            }
-        }
-        const maxErrorSq = CONT_MAX_ERROR * CONT_MAX_ERROR;
-
-        if (index !== -1 && maxDistSq > maxErrorSq) {
-            if (index < i0) this.simplifySegmentbymaxErrorSqFinally(pts, locked, i0, index, out, n);
-            else this.simplifySegmentbymaxErrorSq(pts, locked, i0, index, out);
-            if (index < i1) this.simplifySegmentbymaxErrorSq(pts, locked, index, i1, out);
-            else this.simplifySegmentbymaxErrorSqFinally(pts, locked, index, i1, out, n);
-        } else {
-            //只输出起点
-            out.push(a);
-        }
-
-    }
-    /**
-     * @param {Contour[]} pts
-     * @param {number[]} locked
-     * @param {number} i0
-     * @param {number} i1
-     * @param {Contour[]} out
-     */
-    simplifySegmentbymaxErrorSq(pts, locked, i0, i1, out) {
-        const a = pts[i0];
-        const b = pts[i1];
-        let maxDistSq = 0;
-        let index = -1;
-        for (let i = i0 + 1; i < i1; i++) {
-            const d = distPtSegSq(pts[i], a, b);
-            if (d > maxDistSq) {
-                maxDistSq = d;
-                index = i;
-            }
-        }
-        const maxErrorSq = CONT_MAX_ERROR * CONT_MAX_ERROR;
-        if (index !== -1 && maxDistSq > maxErrorSq) {
-            this.simplifySegmentbymaxErrorSq(pts, locked, i0, index, out);
-            this.simplifySegmentbymaxErrorSq(pts, locked, index, i1, out);
-        } else {
-            //只输出起点
-            out.push(a);
-        }
-    }
-    /**
-     * @param {Contour[]} contour
-     */
-    computeSignedArea(contour) {
-        let area = 0;
-        const n = contour.length;
-        for (let i = 0; i < n; i++) {
-            const p = contour[i];
-            const q = contour[(i + 1) % n];
-            area += (p.x * q.y - q.x * p.y);
-        }
-        return area * 0.5;
-    }
-    /**
-     * abandon
-     * @param {Contour[]} contour
-     */
-    fixWinding(contour) {
-        const area = this.computeSignedArea(contour);
-        //外轮廓CCW（area>0）
-        if (area < 0) {
-            contour.reverse();
-        }
-        return contour;
-    }
-
-    /**
-     * @param {number} sx 起始 cell x
-     * @param {number} sy 起始 cell y
-     * @param {OpenSpan} startSpan
-     * @param {number} startDir 起始边方向
-     * @returns {Contour[] | null}
-     * @param {Set<string>} visited
-     */
-    traceContour(sx, sy, startSpan, startDir, visited) {
-        let x = sx;
-        let y = sy;
-        let span = startSpan;
-        let dir = startDir;
-
-        const verts = [];
-
-        let iter = 0;
-        const MAX_ITER = this.gridX * this.gridY * 4;
-        if (!this.isBoundaryEdge(startSpan, startDir)) return null;
-        const startKey = this.edgeKey(x, y, span, dir);
-        while (iter++ < MAX_ITER) {
-            const key = this.edgeKey(x, y, span, dir);
-            //回到起点
-            if (key === startKey && verts.length > 0) break;
-            if (visited.has(key)) {
-                Instance.Msg("奇怪的轮廓边,找了一遍现在又找一遍");
-                return null;
-            }
-            visited.add(key);
-
-            //只有在boundary边才输出顶点
-            if (this.isBoundaryEdge(span, dir)) {
-                const c = this.corner(x, y, dir);
-
-                const h = this.getCornerHeightFromEdge(x, y, span, dir);
-                const nid = this.getNeighborregionid(span, dir);
-                //Instance.Msg(nid);
-                if (h !== null) {
-                    verts.push({
-                        x: origin.x + c.x * MESH_CELL_SIZE_XY-MESH_CELL_SIZE_XY/2,
-                        y: origin.y + c.y * MESH_CELL_SIZE_XY-MESH_CELL_SIZE_XY/2,
-                        z: origin.z + h * MESH_CELL_SIZE_Z,
-                        regionId: span.regionId,      //当前span的region
-                        neighborRegionId: nid   //对面span的region（或 0）
-                    });
-                }
-            }
-
-            //顺序：右转 → 直行 → 左转 → 后转
-            let advanced = false;
-            for (let i = 0; i < 4; i++) {
-                const ndir = (dir + 3 - i + 4) % 4;
-                const nspan = span.neighbors[ndir];
-                //如果这条边是boundary，就沿边走
-                if (!nspan || nspan.regionId !== span.regionId) {
-                    dir = ndir;
-                    advanced = true;
-                    break;
-                }
-                //否则穿过这条边
-                const p = this.move(x, y, ndir);
-                x = p.x;
-                y = p.y;
-                span = nspan;
-                dir = (ndir + 2) % 4;
-                advanced = true;
-                break;
-            }
-
-            if (!advanced) {
-                Instance.Msg("轮廓断啦");
-                return null;
-            }
-        }
-        if (verts.length < 3) return null;
-        return verts;
-    }
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {OpenSpan} span
-     * @param {number} dir
-     */
-    getCornerHeightFromEdge(x, y, span, dir) {
-        let maxFloor = span.floor;
-        const leftDir = (dir + 3) & 3;
-        //左侧
-        const p1 = this.move(x, y, leftDir);
-        //前方
-        const p2 = this.move(x, y, dir);
-        //左前方
-        const p3 = this.move(p1.x, p1.y, dir);
-
-        //左侧能到的span
-        if (this.inBounds(p1.x, p1.y)) {
-            /**@type {OpenSpan|null} */
-            let s = this.hf[p1.x][p1.y];
-            while (s) {
-                if(s.use)
-                {
-                    if (span.canTraverseTo(s)) {
-                        if (maxFloor < s.floor) {
-                            maxFloor = s.floor;
-                        }
-                    }
-                }
-                s = s.next;
-            }
-        }
-        //前方能到的span
-        if (this.inBounds(p2.x, p2.y)) {
-            /**@type {OpenSpan|null} */
-            let s = this.hf[p2.x][p2.y];
-            while (s) {
-                if(s.use)
-                {
-                    if (span.canTraverseTo(s)) {
-                        if (maxFloor < s.floor) {
-                            maxFloor = s.floor;
-                        }
-                    }
-                }
-                s = s.next;
-            }
-        }
-        //对角能到的span
-        if (this.inBounds(p3.x, p3.y)) {
-            /**@type {OpenSpan|null} */
-            let s = this.hf[p3.x][p3.y];
-            while (s) {
-                if(s.use)
-                {
-                    if (span.canTraverseTo(s)) {
-                        if (maxFloor < s.floor) {
-                            maxFloor = s.floor;
-                        }
-                    }
-                }
-                s = s.next;
-            }
-        }
-        return maxFloor;
-    }
-    /**
-     * @param {number} x
-     * @param {number} y
-     */
-    inBounds(x, y) {
-        return x >= 0 && y >= 0 && x < this.gridX && y < this.gridY;
-    }
-
-    debugDrawContours(duration = 5) {
-        Instance.Msg(`一共${this.contours.length}个轮廓`);
-        for (const contour of this.contours) {
-            const color = { r: 255 * Math.random(), g: 255 * Math.random(), b: 255 * Math.random() };
-            const z = Math.random() * 20;
-            for (let i = 0; i < contour.length; i++) {
-                const a = contour[i];
-                const b = contour[(i + 1) % contour.length];
-                const start = {
-                    x: a.x,
-                    y: a.y,
-                    z: a.z + z
-                };
-                const end = {
-                    x: b.x,
-                    y: b.y,
-                    z: b.z + z
-                };
-                //if(a.neighborRegionId!=b.neighborRegionId)
-                //{
-                //Instance.DebugSphere({center:start,radius:8,duration,color});
-                //}
-                Instance.DebugLine({
-                    start,
-                    end,
-                    color,
-                    duration
-                });
-            }
-        }
-    }
-}
-/**
- * @typedef {Object} Contour
- * @property {number} x
- * @property {number} y
- * @property {number} z
- * @property {number} regionId
- * @property {number} neighborRegionId
- */
-
-class PolyMeshBuilder {
-
-    /**
-     * @param {import("./path_contourbuilder").Contour[][]} contours
-     */
-    constructor(contours) {
-        /** @type {import("./path_contourbuilder").Contour[][]} */
-        this.contours = contours;
-
-        /** @type {import("cs_script/point_script").Vector[]} */
-        this.verts = [];
-        /** @type {number[][]} */
-        this.polys = [];
-        /** @type {number[]} */
-        this.regions = [];
-        /** @type {number[][]} */
-        this.neighbors = [];
-    }
-
-    init() {
-        const unmerged=[];
-        for (const contour of this.contours) {
-            const pl=this.mergeTriangles(this.triangulate(contour),POLY_MERGE_LONGEST_EDGE_FIRST);
-            for (const p of pl) {
-                unmerged.push(p);
-            }
-        }
-        //const merged = this.mergeTriangles(unmerged,false);
-        //不能区域间merge，detail需要使用区域id
-        for (const p of unmerged) {
-            this.addPolygon(p);
-        }
-        this.buildAdjacency();
-    }
-    return() {
-        return {
-            verts: this.verts,
-            polys: this.polys,
-            regions: this.regions,
-            neighbors: this.neighbors
-        }
-    }
-    /**
-     * @param {{x:number,y:number,z:number,regionId:number}[]} poly
-     */
-    triangulate(poly) {
-        //
-        const debugid = -1;
-
-        const verts = poly.slice();
-        const result = [];
-
-        let guard = 0;
-        {
-            while (verts.length > 3 && guard++ < 5000) {
-                let bestEar=null;
-                let minPerimeter=Infinity;
-                let bestIndex=-1;
-
-                for (let i = 0; i < verts.length; i++) {
-                    const prev = verts[(i - 1 + verts.length) % verts.length];
-                    const cur = verts[i];
-                    const next = verts[(i + 1) % verts.length];
-                    //cur对应的角度是否<180度
-                    if (!isConvex(prev, cur, next)) continue;
-                    //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
-                    let contains = false;
-                    for (let j = 0; j < verts.length; j++) {
-                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                        if (pointInTri(verts[j], prev, cur, next)) {
-                            contains = true;
-                            break;
-                        }
-                    }
-                    if (contains) continue;
-                    // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
-                    for (let j = 0; j < verts.length; j++) {
-                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                        if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
-                        {
-                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
-                            contains = true;
-                            break;
-                        }
-                    }
-                    if (contains) continue;
-                    const perimeter = 
-                    Math.sqrt(posDistance2Dsqr(prev, cur)) +
-                    Math.sqrt(posDistance2Dsqr(cur, next)) +
-                    Math.sqrt(posDistance2Dsqr(next, prev));
-                
-                    // 找到周长最短的耳朵
-                    if (perimeter < minPerimeter) {
-                        minPerimeter = perimeter;
-                        bestEar = {prev, cur, next};
-                        bestIndex = i;
-                    }
-                }
-                // 如果找到了最佳耳朵，割掉它
-                if (bestEar && bestIndex !== -1) {
-                    result.push([bestEar.prev, bestEar.cur, bestEar.next]);
-                    verts.splice(bestIndex, 1);
-                } else {
-                    // 找不到耳朵，退出循环
-                    break;
-                }
-            }
-        }
-
-        if (verts.length == 3) {
-            result.push([verts[0], verts[1], verts[2]]);
-        }
-        if (verts.length != 3) {
-            //debug
-            if (verts[0].regionId == debugid) {
-                Instance.Msg(poly.length);
-                for (let i = 0; i < poly.length; i++) {
-                    const a = poly[i];
-                    const b = poly[(i + 1) % poly.length];
-                    Instance.DebugLine({ start: a, end: b, color: { r: 125, g: 125, b: 0 }, duration: 30 });
-                }
-                for (let i = 0; i < verts.length; i++) {
-                    const prev = verts[(i - 1 + verts.length) % verts.length];
-                    const cur = verts[i];
-                    const next = verts[(i + 1) % verts.length];
-                    //cur对应的角度是否<180度
-                    if (!isConvex(prev, cur, next)) {
-                        Instance.DebugSphere({ center: cur, radius: 2, duration: 30, color: { r: 255, g: 0, b: 0 } });
-                        continue;
-                    }
-                    //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
-                    let contains = false;
-                    for (let j = 0; j < verts.length; j++) {
-                        if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                        if (pointInTri(verts[j], prev, cur, next)) {
-                            contains = true;
-                            break;
-                        }
-                    }
-                    if (contains) {
-                        Instance.DebugSphere({ center: cur, radius: 5, duration: 30, color: { r: 0, g: 255, b: 0 } });
-                        continue;
-                    }
-                    // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
-                    for (let j = 0; j < verts.length; j++) {
-                        if (j == i || j == ((i - 1 + verts.length) % verts.length) || j == ((i + 1) % verts.length)) continue;
-                        if (distPtSegSq(verts[j], prev, next) == 0) {
-                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
-                            contains = true;
-                            break;
-                        }
-                    }
-                    if (contains) {
-                        Instance.DebugSphere({ center: cur, radius: 5, duration: 30, color: { r: 0, g: 0, b: 255 } });
-                        continue;
-                    }
-                }
-                //verts.forEach((e)=>{
-                //    Instance.DebugSphere({center:e,radius:5,duration:30,color:{r:255,g:0,b:0}});
-                //});
-            }
-            Instance.Msg("区域：" + poly[0].regionId + "：出现奇怪小错误,耳割法无法分割多边形,猜测,简化轮廓中的两个点,拥有同一个x,y值");
-        }
-        return result;
-    }
-
-    /**
-     * @param {{x:number,y:number,z:number,regionId:number}[][]} tris
-     * @param {boolean}config//是否合并最长边
-     */
-    mergeTriangles(tris,config) {
-        const polys = tris.map(t => t.slice());
-        let merged=true;
-        if(config)
-        {
-            while (merged) {
-                merged = false;
-                let bdist=-Infinity;
-                let bi=-1;
-                let bj=-1;
-                let binfo=null;
-                for (let i = 0; i < polys.length; i++) {
-                    for (let j = i + 1; j < polys.length; j++) {
-                        const info = this.getMergeInfo(polys[i], polys[j]);
-                        if (info&&info.dist>bdist) {
-                            bdist=info.dist;
-                            bi=i;
-                            bj=j;
-                            binfo=info.info;
-                        }
-                    }
-                }
-                if(binfo)
-                {
-                    polys[bi] = binfo;
-                    polys.splice(bj, 1);
-                    merged = true;
-                }
-            }
-        }
-        else
-        {
-            while (merged) {
-                merged = false;
-                outer:
-                for (let i = 0; i < polys.length; i++) {
-                    for (let j = i + 1; j < polys.length; j++) {
-                        const info = this.getMergeInfo(polys[i], polys[j]);
-                        if (info) {
-                            polys[i] = info.info;
-                            polys.splice(j, 1);
-                            merged = true;
-                            break outer;
-                        }
-                    }
-                }
-            }
-        }
-        return polys;
-    }
-    /**
-     * [新增] 获取合并信息，包含合并后的多边形和公共边长度
-     * @param {{x:number,y:number,z:number,regionId:number}[]} a
-     * @param {{x:number,y:number,z:number,regionId:number}[]} b
-     */
-    getMergeInfo(a, b) {
-        let ai = -1, bi = -1;
-
-        // 寻找公共边
-        for (let i = 0; i < a.length; i++) {
-            const aNext = (i + 1) % a.length;
-            for (let j = 0; j < b.length; j++) {
-                const bNext = (j + 1) % b.length;
-                // 判断边是否重合 (a[i]->a[i+1] == b[j+1]->b[j])
-                if (posDistance3Dsqr(a[i],b[bNext])<=1&&posDistance3Dsqr(a[aNext],b[j])<=1) {
-                    ai = i;
-                    bi = j;
-                    break;
-                }
-            }
-            if (ai != -1) break;
-        }
-        //面积都是>0的，都是逆时针
-        if (ai < 0) return null;
-        //Instance.DebugLine({start:a[ai],end:b[bi],duration:60,color:{r:255,g:0,b:0}});
-        // 构建合并后的数组
-        const merged = [];
-        const nA = a.length;
-        const nB = b.length;
-        for (let i = 0; i < nA - 1; i++)
-            merged.push(a[(ai + 1 + i) % nA]);
-        for (let i = 0; i < nB - 1; i++)
-            merged.push(b[(bi + 1 + i) % nB]);
-        // [关键步骤] 移除共线点，加入后，这个点对应的角是180度，就可以去除这个点
-        //this.removeCollinearPoints(merged);
-
-        // 检查顶点数量限制
-        if (merged.length > POLY_MAX_VERTS_PER_POLY) return null;
-
-        // 检查凸性
-        if (!this.isPolyConvex(merged)) return null;
-
-        // 计算公共边长度 (用于优先权排序)
-        const v1 = a[ai];
-        const v2 = a[(ai + 1) % nA];
-        const distSq = (v1.x - v2.x) ** 2 + (v1.y - v2.y) ** 2; // 只计算XY平面距离
-
-        return {info:merged,dist:distSq};
-    }
-    /**
-     * [新增] 移除多边形中三点共线的冗余顶点
-     * @param {{x:number,y:number,z:number,regionId:number}[]} poly 
-     */
-    removeCollinearPoints(poly) {
-        for (let i = 0; i < poly.length; i++) {
-            const n = poly.length;
-            if (n <= 3) break; // 三角形不能再减了
-
-            const prev = poly[(i - 1 + n) % n];
-            const cur = poly[i];
-            const next = poly[(i + 1) % n];
-
-            // 使用面积法判断三点共线 (Area接近0)
-            // area() 已经在你的 path_const 中引入了
-            // 注意：这里需要一个极小的容差，防止浮点数误差
-            if (Math.abs(area(prev, cur, next))<=1) { 
-                poly.splice(i, 1);
-                i--; // 索引回退，检查新的组合
-                //Instance.DebugSphere({center:cur,radius:2,duration:60,color:{r:255,g:0,b:0}});
-            }
-        }
-    }
-    /**
-     * @param {{x:number,y:number,z:number,regionId:number}[]} poly
-     */
-    isPolyConvex(poly) {
-        const n = poly.length;
-        for (let i = 0; i < n; i++) {
-            if (area(poly[i],poly[(i + 1) % n],poly[(i + 2) % n]) < -1) return false;
-        }
-        return true;
-    }
-
-    /**
-     * @param {{x:number,y:number,z:number,regionId:number}[]} poly
-     */
-    addPolygon(poly) {
-        const idx = [];
-        for (const v of poly) {
-            let i = this.verts.findIndex(
-                //p=>Math.abs(p.x-v.x)<=0.5&&Math.abs(p.y-v.y)<=0.5&&Math.abs(p.z-v.z)<=0.5
-                p => p.x === v.x && p.y === v.y && p.z === v.z
-            );
-            if (i < 0) {
-                i = this.verts.length;
-                this.verts.push({ x: v.x, y: v.y, z: v.z });
-                //Instance.DebugSphere({center:{x:v.x,y:v.y,z:v.z+Math.random()*30},radius:8,duration:60,color:{r:0,g:0,b:0}});
-            }
-            idx.push(i);
-        }
-        this.polys.push(idx);
-        this.regions.push(poly[0].regionId);
-        this.neighbors.push(new Array(idx.length).fill(-1));
-    }
-
-    buildAdjacency() {
-        /** edgeKey → {poly, edge} */
-        const edgeMap = new Map();
-
-        for (let pi = 0; pi < this.polys.length; pi++) {
-            const poly = this.polys[pi];
-            for (let ei = 0; ei < poly.length; ei++) {
-                const a = poly[ei];
-                const b = poly[(ei + 1) % poly.length];
-
-                // 无向边：小索引在前
-                const k = a < b ? `${a},${b}` : `${b},${a}`;
-
-                if (!edgeMap.has(k)) {
-                    edgeMap.set(k, { poly: pi, edge: ei });
-                } else {
-                    const other = edgeMap.get(k);
-                    this.neighbors[pi][ei] = other.poly;
-                    this.neighbors[other.poly][other.edge] = pi;
-                }
-            }
-        }
-    }
-    debugDrawPolys(duration = 5) {
-        for (let pi = 0; pi < this.polys.length; pi++) {
-            const poly = this.polys[pi];
-            //const color = getRandomColor();
-            const color={r:255,g:255,b:0};
-            const z = Math.random() * 40*0;
-            for (let i = 0; i < poly.length; i++) {
-                const start = posZfly(this.verts[poly[i]], z);
-                const end = posZfly(this.verts[poly[(i + 1) % poly.length]], z);
-                Instance.DebugLine({ start, end, color, duration });
-                //Instance.DebugSphere({center:start,radius:6,color,duration});
-            }
-        }
-    }
-    debugDrawAdjacency(duration = 15) {
-        for (let i = 0; i < this.polys.length; i++) {
-            const start = this.polyCenter(i);
-            for (let e = 0; e < this.neighbors[i].length; e++) {
-                const ni = this.neighbors[i][e];
-                if (ni < 0) continue;
-                // 只画一次，避免双向重复
-                if (ni < i) continue;
-                const end = this.polyCenter(ni);
-                Instance.DebugLine({ start, end, color: { r: 255, g: 0, b: 255 }, duration });
-            }
-        }
-    }
-    /**
-     * @param {number} pi
-     */
-    polyCenter(pi) {
-        const poly = this.polys[pi];
-        let x = 0, y = 0, z = 0;
-
-        for (const vi of poly) {
-            const v = this.verts[vi];
-            x += v.x;
-            y += v.y;
-            z += v.z;
-        }
-
-        const n = poly.length;
-        return { x: x / n, y: y / n, z: z / n };
-    }
-    debugDrawSharedEdges(duration = 15) {
-        for (let i = 0; i < this.polys.length; i++) {
-            const polyA = this.polys[i];
-            for (let ei = 0; ei < polyA.length; ei++) {
-                const ni = this.neighbors[i][ei];
-                if (ni < 0) continue;
-                // 只画一次
-                if (ni < i) continue;
-                const start = posZfly(this.verts[polyA[ei]], 20);
-                const end = posZfly(this.verts[polyA[(ei + 1) % polyA.length]], 20);
-                Instance.DebugLine({ start, end, color: { r: 0, g: 255, b: 0 }, duration });
-            }
-        }
-    }
-}
-
-class PolyMeshDetailBuilder {
-    /**
-     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][],regions:number[],neighbors:number[][]}} mesh
-     * @param {OpenHeightfield} hf
-     */
-    constructor(mesh, hf) {
-        this.mesh = mesh;
-        /**@type {OpenHeightfield} */
-        this.hf = hf;
-        /**@type {import("cs_script/point_script").Vector[]}*/
-        this.verts = [];
-        /**@type {number[][]}*/
-        this.tris = [];
-        /**@type {number[][]}*/
-        this.meshes = [];
-        /**@type {number[]} */
-        this.triTopoly=[];
-    }
-
-    init() {
-        for (let pi = 0; pi < this.mesh.polys.length; pi++) {
-            this.buildPoly(pi);
-        }
-
-        return {
-            verts: this.verts,
-            tris: this.tris,
-            meshes: this.meshes,
-            triTopoly:this.triTopoly
-        };
-    }
-    debugDrawPolys(duration = 5) {
-        for (let pi = 0; pi < this.tris.length; pi++) {
-            const tri = this.tris[pi];
-            const color = { r: 255 * Math.random(), g: 255 * Math.random(), b: 255 * Math.random() };
-            Instance.DebugLine({ start:this.verts[tri[0]], end:this.verts[tri[1]], color, duration });
-            Instance.DebugLine({ start:this.verts[tri[1]], end:this.verts[tri[2]], color, duration });
-            Instance.DebugLine({ start:this.verts[tri[2]], end:this.verts[tri[0]], color, duration });
-        }
-    }
-    /**
-     * @param {number} pi
-     */
-    buildPoly(pi) {
-        const poly = this.mesh.polys[pi];
-        const regionid=this.mesh.regions[pi];
-        const polyVerts = this.getPolyVerts(this.mesh, poly);
-        //待更新：生成内部采样点时高度用三角剖分后的高度
-
-        // 1. 为多边形边界顶点采样高度
-        const borderVerts = this.applyHeights(polyVerts, this.hf,regionid);
-        // 2. 计算边界平均高度和高度范围
-        const borderHeightInfo = this.calculateBorderHeightInfo(borderVerts);
-        // 3. 获取初始三角剖分（用于高度差异检查）
-        const initialVertices = [...borderVerts];
-        const initialConstraints = [];
-        for (let i = 0; i < borderVerts.length; i++) {
-            const j = (i + 1) % borderVerts.length;
-            initialConstraints.push([i, j]);
-        }
-        // 4. 执行初始剖分（基于边界点）
-        const trianglesCDT = new SimplifiedCDT(initialVertices, initialConstraints);
-        let triangles = trianglesCDT.getTri();
-        // 5. 生成内部包括边界采样点
-        let rawSamples = this.buildDetailSamples(polyVerts, borderHeightInfo, this.hf,triangles,trianglesCDT.vertices,regionid);
-        // 6. 过滤内部采样点：只保留高度差异大的点
-        while(rawSamples.length>0)
-        {
-            let insert=false;
-            let heightDiff = 0;
-            let heightid = -1;
-            triangles = trianglesCDT.getTri();
-            let toRemoveIndices = [];
-            for (let i=0;i<rawSamples.length;i++) {
-                const sample=rawSamples[i];
-                let diff=0;
-                // 找到包含采样点的三角形
-                for (const tri of triangles) {
-                    if (tri.containsPoint(sample, trianglesCDT.vertices)) {
-                        const interpolatedHeight = tri.interpolateHeight(sample.x, sample.y, trianglesCDT.vertices);
-                        diff = Math.abs(sample.z - interpolatedHeight);
-                        if(this.isNearTriangleEdge(sample,tri,trianglesCDT.vertices)) diff = 0;
-                        break;
-                    }
-                }
-                // 只有当高度差异超过阈值时才保留
-                if(diff<=POLY_DETAIL_HEIGHT_ERROR)toRemoveIndices.push(i);
-                else if (diff > heightDiff) {
-                    heightDiff=diff;
-                    heightid=i;
-                    insert=true;
-                }
-            }
-            if(insert)trianglesCDT.insertPointSimplified(rawSamples[heightid]);
-            else break;
-            for (let i = toRemoveIndices.length - 1; i >= 0; i--) {
-                rawSamples.splice(toRemoveIndices[i], 1);
-            }
-        }
-        // 7. 添加到全局列表
-        const baseVert = this.verts.length;
-        const baseTri = this.tris.length;
-        const allVerts=trianglesCDT.vertices;
-        for (const v of allVerts) {
-            this.verts.push(v);
-        }
-        triangles = trianglesCDT.getTri();
-
-        for (const tri of triangles) {
-            this.tris.push([
-                baseVert + tri.a,
-                baseVert + tri.b,
-                baseVert + tri.c
-            ]);
-            this.triTopoly.push(pi);
-        }
-
-        this.meshes.push([
-            baseVert,
-            allVerts.length,
-            baseTri,
-            triangles.length
-        ]);
-    }
-    /**
-     * 计算边界顶点的高度信息
-     * @param {import("cs_script/point_script").Vector[]} borderVerts
-     * @returns {{avgHeight: number, minHeight: number, maxHeight: number, heightRange: number}}
-     */
-    calculateBorderHeightInfo(borderVerts) {
-        let sumHeight = 0;
-        let minHeight = Infinity;
-        let maxHeight = -Infinity;
-
-        for (const v of borderVerts) {
-            sumHeight += v.z;
-            minHeight = Math.min(minHeight, v.z);
-            maxHeight = Math.max(maxHeight, v.z);
-        }
-
-        const avgHeight = sumHeight / borderVerts.length;
-        const heightRange = maxHeight - minHeight;
-
-        return {
-            avgHeight,
-            minHeight,
-            maxHeight,
-            heightRange
-        };
-    }
-    /**
-     * @param {{ verts: import("cs_script/point_script").Vector[]; polys?: number[][]; regions?: number[]; neighbors?: number[][]; }} mesh
-     * @param {number[]} poly
-     */
-    getPolyVerts(mesh, poly) {
-        return poly.map(vi => mesh.verts[vi]);
-    }
-    /**
-     * 生成内部采样点（带高度误差检查）
-     * @param {import("cs_script/point_script").Vector[]} polyVerts
-     * @param {{avgHeight: number;minHeight: number;maxHeight: number;heightRange: number;}} heightInfo
-     * @param {OpenHeightfield} hf
-     * @returns {import("cs_script/point_script").Vector[]}
-     * @param {Triangle[]} initialTriangles
-     * @param {import("cs_script/point_script").Vector[]} initialVertices
-     * @param {number} regionid
-     */
-    buildDetailSamples(polyVerts, heightInfo, hf,initialTriangles,initialVertices,regionid) {
-        const samples = [];
-        // 2. AABB
-        let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
-        for (const v of polyVerts) {
-            minx = Math.min(minx, v.x);
-            miny = Math.min(miny, v.y);
-            maxx = Math.max(maxx, v.x);
-            maxy = Math.max(maxy, v.y);
-        }
-
-        const step = POLY_DETAIL_SAMPLE_DIST * MESH_CELL_SIZE_XY;
-        for (let x = minx + step / 2; x <= maxx; x += step) {
-            for (let y = miny + step / 2; y <= maxy; y += step) {
-                if (this.pointInPoly2D(x, y, polyVerts)) {
-                    // 采样高度
-                    let triheight=heightInfo.avgHeight;
-
-                    // 计算与边界平均高度的差值
-                    //const heightDiff = Math.abs(height - heightInfo.avgHeight);
-                    for (const tri of initialTriangles) {
-                        if (tri.containsPoint({x, y,z:heightInfo.avgHeight},initialVertices)) {
-                            // 使用三角形插值计算高度
-                            triheight = tri.interpolateHeight(x, y, initialVertices);
-                            break;
-                        }
-                    }
-                    const height=this.sampleHeight(hf, x, y, triheight??heightInfo.avgHeight,regionid);
-                    // 检查是否超过阈值
-                    if(Math.abs(height - triheight)>POLY_DETAIL_HEIGHT_ERROR) {
-                        samples.push({ x: x, y: y, z: height });
-                    }
-                }
-            }
-        }
-        return samples;
-    }
-    /**
-     * @param {import("cs_script/point_script").Vector} sample
-     * @param {Triangle} tri
-     * @param {import("cs_script/point_script").Vector[]} verts
-     */
-    isNearTriangleEdge(sample, tri, verts) {
-
-        const dis = Math.min(distPtSegSq(sample,verts[tri.a],verts[tri.b]),distPtSegSq(sample,verts[tri.b],verts[tri.c]),distPtSegSq(sample,verts[tri.c],verts[tri.a]));
-        if (dis < POLY_DETAIL_SAMPLE_DIST * 0.5) return true;
-        return false;
-    }
-    /**
-     * @param {import("cs_script/point_script").Vector[]} polyVerts
-     * @param {OpenHeightfield} hf
-     * @param {number} regionid
-     */
-    applyHeights(polyVerts, hf,regionid) {
-        const resultVerts = [];
-        const n = polyVerts.length;
-        const step = POLY_DETAIL_SAMPLE_DIST * MESH_CELL_SIZE_XY;
-        for (let i = 0; i < n; i++) {
-            const a = polyVerts[i];
-            const b = polyVerts[(i + 1) % n];
-            // 对当前顶点采样高度
-            const az = this.sampleHeight(hf, a.x, a.y, a.z,regionid);
-            const bz = this.sampleHeight(hf, b.x, b.y, b.z, regionid);
-            const A = { x: a.x, y: a.y, z: az };
-            const B = { x: b.x, y: b.y, z: bz };
-            // 添加当前顶点（起始点）
-            resultVerts.push(A);
-
-            // 细分当前边
-            const samples = this.sampleEdgeWithHeightCheck(
-                A, 
-                B, 
-                hf,
-                step
-            );
-            // 递归插点
-            this.subdivideEdgeByHeight(
-                A,
-                B,
-                samples,
-                hf,
-                regionid,
-                resultVerts
-            );
-        }
-        
-        return resultVerts;
-    }
-    /**
-     * 在 [start, end] 之间递归插入高度偏差最大的点
-     * @param {import("cs_script/point_script").Vector} start
-     * @param {import("cs_script/point_script").Vector} end
-     * @param {import("cs_script/point_script").Vector[]} samples // 该边上的细分点（不含 start/end）
-     * @param {OpenHeightfield} hf
-     * @param {number} regionid
-     * @param {import("cs_script/point_script").Vector[]} outVerts
-     */
-    subdivideEdgeByHeight(start, end,samples,hf,regionid,outVerts) {
-        let maxError = 0;
-        let maxIndex = -1;
-        let maxVert = null;
-
-        const total = samples.length;
-
-        for (let i = 0; i < total; i++) {
-            const s = samples[i];
-            const t = (i + 1) / (total + 1);
-
-            // 如果不加该点时的插值高度
-            const interpZ = start.z * (1 - t) + end.z * t;
-
-            const h = this.sampleHeight(hf, s.x, s.y, interpZ, regionid);
-            const err = Math.abs(h - interpZ);
-
-            if (err > maxError) {
-                maxError = err;
-                maxIndex = i;
-                maxVert = { x: s.x, y: s.y, z: h };
-            }
-        }
-
-        // 没有需要加的点
-        if (maxError <= POLY_DETAIL_HEIGHT_ERROR || maxIndex === -1||!maxVert) {
-            return;
-        }
-
-        // 递归左半
-        this.subdivideEdgeByHeight(
-            start,
-            maxVert,
-            samples.slice(0, maxIndex),
-            hf,
-            regionid,
-            outVerts
-        );
-
-        // 插入当前最大误差点（顺序保证）
-        outVerts.push(maxVert);
-
-        // 递归右半
-        this.subdivideEdgeByHeight(
-            maxVert,
-            end,
-            samples.slice(maxIndex + 1),
-            hf,
-            regionid,
-            outVerts
-        );
-    }
-    /**
-     * 在边上采样并检查高度误差
-     * @param {import("cs_script/point_script").Vector} start
-     * @param {import("cs_script/point_script").Vector} end
-     * @param {OpenHeightfield} hf
-     * @param {number} sampleDist
-     * @returns {import("cs_script/point_script").Vector[]}
-     */
-    sampleEdgeWithHeightCheck(start, end, hf, sampleDist) {
-        const samples = [];
-        
-        // 计算边向量和长度
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        const length = Math.sqrt(dx * dx + dy * dy);
-        
-        if (length <= 1e-6) {
-            return []; // 边长度为0，不采样
-        }
-        
-        // 计算方向向量
-        const dirX = dx / length;
-        const dirY = dy / length;
-        // 计算采样点数（不包括起点和终点）
-        const numSamples = Math.floor(length / sampleDist);
-        
-        // 记录上一个采样点的高度
-
-        for (let i = 1; i <= numSamples; i++) {
-            const t = i / (numSamples + 1); // 确保不采样到端点
-            const x = start.x + dirX * length * t;
-            const y = start.y + dirY * length * t;
-            const z = start.z * (1 - t) + end.z * t;
-            samples.push({ x, y, z });
-        }
-        
-        return samples;
-    }
-    /**
-     * @param {OpenHeightfield} hf
-     * @param {number} wx
-     * @param {number} wy
-     * @param {number} fallbackZ
-     * @param {number} regionid
-     */
-    sampleHeight(hf, wx, wy, fallbackZ,regionid) {
-        const ix = Math.floor((wx - origin.x) / MESH_CELL_SIZE_XY);
-        const iy = Math.floor((wy - origin.y) / MESH_CELL_SIZE_XY);
-
-        if (ix < 0 || iy < 0 || ix >= hf.gridX || iy >= hf.gridY) return fallbackZ;
-
-        let best = null;
-        let bestDiff = Infinity;
-        /**@type {OpenSpan|null} */
-        let span = hf.cells[ix][iy];
-        while (span) {
-            if(span.regionId==regionid)
-            {
-                const z = origin.z + span.floor * MESH_CELL_SIZE_Z;
-                const d = Math.abs(z - fallbackZ);
-                if (d < bestDiff) {
-                    bestDiff = d;
-                    best = z;
-                }
-            }
-            span = span.next;
-        }
-        // 如果没有找到合适的span，开始螺旋式搜索
-        if (best === null) {
-            const maxRadius = Math.max(hf.gridX, hf.gridY); // 搜索的最大半径
-            let radius = 1; // 初始半径
-            out:
-            while (radius <= maxRadius) {
-                // 螺旋式外扩，检查四个方向
-                for (let offset = 0; offset <= radius; offset++) {
-                    // 检查 (ix + offset, iy + radius) 或 (ix + radius, iy + offset) 等位置
-                    let candidates = [
-                        [ix + offset, iy + radius], // 上
-                        [ix + radius, iy + offset], // 右
-                        [ix - offset, iy - radius], // 下
-                        [ix - radius, iy - offset]  // 左
-                    ];
-
-                    for (const [nx, ny] of candidates) {
-                        if (nx >= 0 && ny >= 0 && nx < hf.gridX && ny < hf.gridY) {
-                            // 在有效范围内，查找对应的span
-                            span = hf.cells[nx][ny];
-                            while (span) {
-                                if(span.regionId==regionid)
-                                {
-                                    const z = origin.z + span.floor * MESH_CELL_SIZE_Z;
-                                    const d = Math.abs(z - fallbackZ);
-                                    if (d < bestDiff) {
-                                        bestDiff = d;
-                                        best = z;
-                                        break out;
-                                    }
-                                }
-                                span = span.next;
-                            }
-                        }
-                    }
-                }
-                // 增大半径，继续螺旋扩展
-                radius++;
-            }
-        }
-
-        // 如果最终没有找到合适的span，返回默认的fallbackZ
-        return best ?? fallbackZ;
-    }
-    /**
-     * 判断点是否在多边形内（不含边界）
-     * 使用 odd-even rule（射线法）
-     *
-     * @param {number} px
-     * @param {number} py
-     * @param {{x:number,y:number}[]} poly
-     * @returns {boolean}
-     */
-    pointInPoly2D(px, py, poly) {
-        let inside = false;
-        const n = poly.length;
-
-        for (let i = 0, j = n - 1; i < n; j = i++) {
-            const xi = poly[i].x, yi = poly[i].y;
-            const xj = poly[j].x, yj = poly[j].y;
-
-            // ===== 点在边上（直接算 outside）=====
-            if (this.pointOnSegment2D(px, py, xi, yi, xj, yj)) {
-                return false;
-            }
-
-            // ===== 射线法 =====
-            const intersect =
-                ((yi > py) !== (yj > py)) &&
-                (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi);
-
-            if (intersect) inside = !inside;
-        }
-
-        return inside;
-    }
-
-    /**
-     * 点是否在线段上（含端点）
-     * @param {number} px
-     * @param {number} py
-     * @param {number} x1
-     * @param {number} y1
-     * @param {number} x2
-     * @param {number} y2
-     */
-    pointOnSegment2D(px, py, x1, y1, x2, y2) {
-        // 共线
-        const cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
-        if (Math.abs(cross) > 1e-6) return false;
-
-        // 在线段范围内
-        const dot =
-            (px - x1) * (px - x2) +
-            (py - y1) * (py - y2);
-
-        return dot <= 0;
-    }
-}
-
-/**
- * 简化的约束Delaunay三角剖分器（针对凸多边形优化）
- */
-class SimplifiedCDT {
-    /**
-     * @param {import("cs_script/point_script").Vector[]} vertices 顶点列表
-     * @param {number[][]} constraints 约束边列表
-     */
-    constructor(vertices, constraints) {
-        this.vertices = vertices;
-        this.constraints = constraints;
-        /** @type {Triangle[]} */
-        this.triangles = [];
-        
-        // 构建约束边的查找集
-        this.constraintEdges = new Set();
-        for (const [a, b] of constraints) {
-            // 确保边是规范化的（小索引在前）
-            const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
-            this.constraintEdges.add(key);
-        }
-        //初始剖分：耳割法
-        this.earClipping(vertices);
-    }
-
-    /**
-     * @returns {Triangle[]} 三角形顶点索引列表
-     */
-    getTri() {
-        return this.triangles;
-    }
-    /**
-     * @param {{x:number,y:number,z:number}[]} poly
-     */
-    earClipping(poly) {
-        const verts = Array.from({ length: poly.length }, (_, i) => i);
-        let guard = 0;
-        while (verts.length > 3 && guard++ < 5000) {
-            let bestEar=null;
-            let minPerimeter=Infinity;
-            let bestIndex=-1;
-
-            for (let i = 0; i < verts.length; i++) {
-                const prev = poly[verts[(i - 1 + verts.length) % verts.length]];
-                const cur = poly[verts[i]];
-                const next = poly[verts[(i + 1) % verts.length]];
-                //cur对应的角度是否<180度
-                if (!isConvex(prev, cur, next)) continue;
-                //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
-                let contains = false;
-                for (let j = 0; j < verts.length; j++) {
-                    if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                    if (pointInTri(poly[verts[j]], prev, cur, next)) {
-                        contains = true;
-                        break;
-                    }
-                }
-                if (contains) continue;
-                // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
-                for (let j = 0; j < verts.length; j++) {
-                    if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                    if (distPtSegSq(poly[verts[j]], prev, next) == 0) //判断点p是否在ab线段上
-                    {
-                        if (posDistance2Dsqr(prev, poly[verts[j]]) == 0 || posDistance2Dsqr(next, poly[verts[j]]) == 0) continue;
-                        contains = true;
-                        break;
-                    }
-                }
-                if (contains) continue;
-                const perimeter = 
-                Math.sqrt(posDistance2Dsqr(prev, cur)) +
-                Math.sqrt(posDistance2Dsqr(cur, next)) +
-                Math.sqrt(posDistance2Dsqr(next, prev));
-            
-                // 找到周长最短的耳朵
-                if (perimeter < minPerimeter) {
-                    minPerimeter = perimeter;
-                    bestEar = {p:verts[(i - 1 + verts.length) % verts.length], c:verts[i], n:verts[(i + 1) % verts.length]};
-                    bestIndex = i;
-                }
-            }
-            // 如果找到了最佳耳朵，割掉它
-            if (bestEar && bestIndex !== -1) {
-                this.triangles.push(new Triangle(bestEar.p, bestEar.c, bestEar.n));
-                verts.splice(bestIndex, 1);
-            } else {
-                // 找不到耳朵，退出循环
-                break;
-            }
-        }
-        if (verts.length == 3) {
-            this.triangles.push(new Triangle(verts[0], verts[1], verts[2]));
-        }else Instance.Msg("细节多边形耳割法错误!");
-    }
-    /**
-     * 简化的点插入方法（你的版本，稍作优化）
-     * @param {import("cs_script/point_script").Vector} point
-     */
-    insertPointSimplified(point) {
-
-        const pointIndex = this.vertices.length;
-        this.vertices.push(point);
-        const p=this.vertices[pointIndex];
-        let targetIdx = -1;
-
-        // 找到包含点的三角形
-        for (let i = 0; i < this.triangles.length; i++) {
-            if (this.triangles[i].containsPoint(p, this.vertices)) {
-                targetIdx = i;
-                break;
-            }
-        }
-        
-        if (targetIdx === -1) {
-            // 点不在任何三角形内（可能在边上），尝试找到包含点的边
-            this.handlePointOnEdge(pointIndex);
-            //Instance.Msg("点在边上");
-            return;
-        }
-
-        const t = this.triangles[targetIdx];
-
-        this.triangles.splice(targetIdx, 1);
-
-        // 分裂为三个新三角形
-        const t1 = new Triangle(t.a, t.b, pointIndex);
-        const t2 = new Triangle(t.b, t.c, pointIndex);
-        const t3 = new Triangle(t.c, t.a, pointIndex);
-        
-        this.triangles.push(t1, t2, t3);
-
-        // 只对这三条边进行局部优化，而不是全图扫描
-        this.legalizeEdge(pointIndex, t.a, t.b);
-        this.legalizeEdge(pointIndex, t.b, t.c);
-        this.legalizeEdge(pointIndex, t.c, t.a);
-    }
-    /**
-     * 处理点在边上的情况
-     * @param {number} pointIndex 
-     */
-    handlePointOnEdge(pointIndex) {
-        const p = this.vertices[pointIndex];
-        // 首先检查是否在约束边上
-        for (const [a, b] of this.constraints) {
-            if (this.pointOnSegment(p, this.vertices[a], this.vertices[b])) {
-                Instance.Msg("点在约束边上");
-                return;
-            }
-        }
-        // 查找包含该点的边
-        for (let i = 0; i < this.triangles.length; i++) {
-            const tri = this.triangles[i];
-            const edges = tri.edges();
-            
-            for (const [a, b] of edges) {
-                if (this.isConstraintEdge(a, b)) continue;
-                if (this.pointOnSegment(p, this.vertices[a], this.vertices[b])) {
-                    // 找到共享这条边的另一个三角形
-                    const otherTri = this.findAdjacentTriangleByEdge([a, b], tri);
-                    
-                    if (otherTri) {
-
-                        // 移除两个共享这条边的三角形
-                        this.triangles.splice(this.triangles.indexOf(tri), 1);
-                        this.triangles.splice(this.triangles.indexOf(otherTri), 1);
-                        
-                        // 获取两个三角形中不在这条边上的顶点
-                        const c = tri.oppositeVertex(a, b);
-                        const d = otherTri.oppositeVertex(a, b);
-                        
-                        // 创建四个新三角形
-                        const t1=new Triangle(a, pointIndex, c);
-                        const t2=new Triangle(pointIndex, b, c);
-                        const t3=new Triangle(a, d, pointIndex);
-                        const t4=new Triangle(pointIndex, d, b);
-
-                        this.triangles.push(t1,t2,t3,t4);
-
-                        // 优化新产生的边
-                        this.legalizeEdge(pointIndex, a, c);
-                        this.legalizeEdge(pointIndex, b, c);
-                        this.legalizeEdge(pointIndex, a, d);
-                        this.legalizeEdge(pointIndex, b, d);
-                        
-                        return;
-                    }
-                }
-            }
-        }
-    }
-    /**
-     * 判断点是否在线段上
-     * @param {{ x: any; y: any;}} p
-     * @param {{ x: any; y: any;}} a
-     * @param {{ x: any; y: any;}} b
-     */
-    pointOnSegment(p, a, b) {
-        const cross = (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
-        if (Math.abs(cross) > 1e-6) return false;
-        
-        const dot = (p.x - a.x) * (p.x - b.x) + (p.y - a.y) * (p.y - b.y);
-        return dot <= 1e-6;
-    }
-
-    /**
-     * 局部递归优化 (Standard Delaunay Legalization)
-     * @param {number} pIdx 新插入的点
-     * @param {number} v1 边的一个端点
-     * @param {number} v2 边的另一个端点
-     */
-    legalizeEdge(pIdx, v1, v2) {
-        // 检查是否是约束边，约束边不可翻转
-        if (this.isConstraintEdge(v1, v2)) {
-            return;
-        }
-        
-        const edge = [v1, v2];
-        const triangleWithP = this.findTriangleByVerts(v1, v2, pIdx);
-        if (!triangleWithP) return;
-        
-        const t2 = this.findAdjacentTriangleByEdge(edge, triangleWithP);
-        if (!t2) return;
-
-        const otherVert = t2.oppositeVertex(v1, v2);
-        
-        // 检查 Delaunay 条件
-        if (this.inCircumcircle(
-            this.vertices[v1], 
-            this.vertices[v2], 
-            this.vertices[pIdx], 
-            this.vertices[otherVert]
-        )) {
-            // 翻转边
-            this.removeTriangle(t2);
-            this.removeTriangle(triangleWithP);
-
-            // 创建两个新三角形
-            const tt1=new Triangle(v1, otherVert, pIdx);
-            const tt2=new Triangle(v2, otherVert, pIdx);
-
-            this.triangles.push(tt1,tt2);
-
-            // 递归优化新产生的两条外边
-            this.legalizeEdge(pIdx, v1, otherVert);
-            this.legalizeEdge(pIdx, v2, otherVert);
-        }
-    }
-    
-    /**
-     * 检查是否是约束边
-     * @param {number} a
-     * @param {number} b
-     */
-    isConstraintEdge(a, b) {
-        const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
-        return this.constraintEdges.has(key);
-    }
-
-    /**
-     * 通过三个顶点找到三角形
-     * @param {number} a
-     * @param {number} b
-     * @param {number} c
-     */
-    findTriangleByVerts(a, b, c) {
-        for (const tri of this.triangles) {
-            if ((tri.a === a && tri.b === b && tri.c === c) ||
-                (tri.a === a && tri.b === c && tri.c === b) ||
-                (tri.a === b && tri.b === a && tri.c === c) ||
-                (tri.a === b && tri.b === c && tri.c === a) ||
-                (tri.a === c && tri.b === a && tri.c === b) ||
-                (tri.a === c && tri.b === b && tri.c === a)) {
-                return tri;
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * 通过共享边找到相邻三角形
-     * @param {number[]} edge
-     * @param {Triangle} excludeTriangle
-     */
-    findAdjacentTriangleByEdge(edge, excludeTriangle) {
-        const [a, b] = edge;
-        
-        for (const tri of this.triangles) {
-            if (tri === excludeTriangle) continue;
-            
-            if ((tri.a === a && tri.b === b) ||
-                (tri.a === b && tri.b === a) ||
-                (tri.a === a && tri.c === b) ||
-                (tri.a === b && tri.c === a) ||
-                (tri.b === a && tri.c === b) ||
-                (tri.b === b && tri.c === a)) {
-                return tri;
-            }
-        }
-        
-        return null;
-    }
-    
-    /**
-     * 移除三角形
-     * @param {Triangle} triangle
-     */
-    removeTriangle(triangle) {
-        const index = this.triangles.indexOf(triangle);
-        if (index !== -1) {
-            this.triangles.splice(index, 1);
-        }
-    }
-
-    /**
-     * 检查点是否在三角形的外接圆内
-     * @param {{ x: any; y: any;}} a
-     * @param {{ x: any; y: any;}} b
-     * @param {{ x: any; y: any;}} c
-     * @param {{ x: any; y: any;}} d
-     */
-    inCircumcircle(a, b, c, d) {
-        const orient =
-        (b.x - a.x) * (c.y - a.y) -
-        (b.y - a.y) * (c.x - a.x);
-        const ax = a.x, ay = a.y;
-        const bx = b.x, by = b.y;
-        const cx = c.x, cy = c.y;
-        const dx = d.x, dy = d.y;
-        
-        const adx = ax - dx;
-        const ady = ay - dy;
-        const bdx = bx - dx;
-        const bdy = by - dy;
-        const cdx = cx - dx;
-        const cdy = cy - dy;
-        
-        const abdet = adx * bdy - bdx * ady;
-        const bcdet = bdx * cdy - cdx * bdy;
-        const cadet = cdx * ady - adx * cdy;
-        const alift = adx * adx + ady * ady;
-        const blift = bdx * bdx + bdy * bdy;
-        const clift = cdx * cdx + cdy * cdy;
-        
-        const det = alift * bcdet + blift * cadet + clift * abdet;
-        
-        return orient > 0 ? det > 0 : det < 0;
-    }
-}
-/**
- * 三角形类
- */
-class Triangle {
-    /**
-     * @param {number} a
-     * @param {number} b
-     * @param {number} c
-     */
-    constructor(a, b, c) {
-        this.a = a;
-        this.b = b;
-        this.c = c;
-    }
-
-    /**
-     * 返回三角形的三条边
-     * @returns {number[][]}
-     */
-    edges() {
-        return [
-            [this.a, this.b],
-            [this.b, this.c],
-            [this.c, this.a]
-        ];
-    }
-
-    /**
-     * 检查是否包含某条边
-     * @param {number[]} edge
-     * @returns {boolean}
-     */
-    hasEdge(edge) {
-        const [e1, e2] = edge;
-        return (this.a === e1 && this.b === e2) ||
-            (this.b === e1 && this.c === e2) ||
-            (this.c === e1 && this.a === e2) ||
-            (this.a === e2 && this.b === e1) ||
-            (this.b === e2 && this.c === e1) ||
-            (this.c === e2 && this.a === e1);
-    }
-
-    /**
-     * 检查点是否在三角形内
-     * @param {import("cs_script/point_script").Vector} point
-     * @param {import("cs_script/point_script").Vector[]} vertices
-     * @returns {boolean}
-     */
-    containsPoint(point, vertices) {
-        const va = vertices[this.a];
-        const vb = vertices[this.b];
-        const vc = vertices[this.c];
-
-        return pointInTri(point, va, vb, vc);
-    }
-
-    /**
-     * 找到边对面的顶点
-     * @param {number} v1
-     * @param {number} v2
-     * @returns {number}
-     */
-    oppositeVertex(v1, v2) {
-        if (this.a !== v1 && this.a !== v2) return this.a;
-        if (this.b !== v1 && this.b !== v2) return this.b;
-        if (this.c !== v1 && this.c !== v2) return this.c;
-        return -1;
-    }
-    /**
-     * 计算点在三角形平面上的插值高度
-     * @param {number} x 点的x坐标
-     * @param {number} y 点的y坐标
-     * @param {import("cs_script/point_script").Vector[]} vertices
-     * @returns {number} 插值高度
-     */
-    interpolateHeight(x, y, vertices) {
-        const va = vertices[this.a];
-        const vb = vertices[this.b];
-        const vc = vertices[this.c];
-        
-        // 使用重心坐标插值
-        const denom = (vb.y - vc.y) * (va.x - vc.x) + (vc.x - vb.x) * (va.y - vc.y);
-        
-        if (Math.abs(denom) < 1e-6) {
-            // 三角形退化，返回三个顶点高度的平均值
-            return (va.z + vb.z + vc.z) / 3;
-        }
-        
-        const u = ((vb.y - vc.y) * (x - vc.x) + (vc.x - vb.x) * (y - vc.y)) / denom;
-        const v = ((vc.y - va.y) * (x - vc.x) + (va.x - vc.x) * (y - vc.y)) / denom;
-        const w = 1 - u - v;
-        
-        // 插值高度
-        return u * va.z + v * vb.z + w * vc.z;
-    }
-}
-
-class JumpLinkBuilder
+class StaticData
 {
-    /**
-     * @param {{ verts: import("cs_script/point_script").Vector[]; polys: number[][]; regions: number[]; neighbors: number[][]; }} polyMesh
-     */
-    constructor(polyMesh) {
-        this.mesh = polyMesh;
-        this.jumpDist = MESH_CELL_SIZE_XY*6;
-        this.jumpHeight = MAX_JUMP_HEIGHT*MESH_CELL_SIZE_Z;
-        this.walkHeight = MAX_WALK_HEIGHT*MESH_CELL_SIZE_Z;
-        this.linkdist=250;//可行走区域A和可行走区域B之间的每个跳点的最小距离
-        /**@type {{ PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number;type: number; }[]}*/
-        this.links = [];
-        //存储每个多边形所属的连通区域 ID
-        /**@type {number[] | Int32Array<ArrayBuffer>}*/
-        this.islandIds=[];
-    }
-    /**
-     * 收集所有的边界边
-     */
-    collectBoundaryEdges() {
-        const edges = [];
-        const { polys, verts, neighbors } = this.mesh;
-
-        for (let i = 0; i < polys.length; i++) {
-            const poly = polys[i];
-            for (let j = 0; j < poly.length; j++) {
-                // 如果没有邻居，就是边界边
-                if (neighbors[i][j] < 0) {
-                    const v1 = verts[poly[j]];
-                    const v2 = verts[poly[(j + 1) % poly.length]];
-                    edges.push({
-                        polyIndex: i,
-                        p1: v1,
-                        p2: v2
-                    });
-                    //Instance.DebugLine({start:v1,end:v2,duration:60,color:{r:255,g:0,b:0}});
-                }
-            }
-        }
-        return edges;
-    }
-    /**
-     * 判断两个多边形是否已经是物理邻居
-     * @param {number} idxA
-     * @param {number} idxB
-     */
-    areNeighbors(idxA, idxB) {
-        const nList = this.mesh.neighbors[idxA];
-        return nList.includes(idxB);
-    }
-    /**
-     * @param {import("cs_script/point_script").Vector} p1
-     * @param {import("cs_script/point_script").Vector} p2
-     * @param {import("cs_script/point_script").Vector} p3
-     * @param {import("cs_script/point_script").Vector} p4
-     */
-    closestPtSegmentSegment(p1, p2, p3, p4) {
-        // 算法来源：Real-Time Collision Detection (Graham Walsh)
-        // 计算线段 S1(p1, p2) 和 S2(p3, p4) 之间的最近点
-        
-        const d1 = { x: p2.x - p1.x, y: p2.y - p1.y}; // 忽略 Z 轴分量参与距离计算
-        const d2 = { x: p4.x - p3.x, y: p4.y - p3.y};
-        const r = { x: p1.x - p3.x, y: p1.y - p3.y};
-
-        const a = d1.x * d1.x + d1.y * d1.y; // Squared length of segment S1
-        const e = d2.x * d2.x + d2.y * d2.y; // Squared length of segment S2
-        const f = d2.x * r.x + d2.y * r.y;
-
-        const EPSILON = 1e-6;
-
-        // 检查线段是否退化成点
-        if (a <= EPSILON && e <= EPSILON) {
-            // 两个都是点
-            return { distSq: posDistance2Dsqr(p1, p3), ptA: p1, ptB: p3 };
-        }
-        
-        let s, t;
-        if (a <= EPSILON) {
-            // S1 是点
-            s = 0.0;
-            t = f / e;
-            t = Math.max(0.0, Math.min(1.0, t));
-        } else {
-            const c = d1.x * r.x + d1.y * r.y;
-            if (e <= EPSILON) {
-                // S2 是点
-                t = 0.0;
-                s = Math.max(0.0, Math.min(1.0, -c / a));
-            } else {
-                // 常规情况：两条线段
-                const b = d1.x * d2.x + d1.y * d2.y;
-                const denom = a * e - b * b;
-
-                if (denom !== 0.0) {
-                    s = Math.max(0.0, Math.min(1.0, (b * f - c * e) / denom));
-                } else {
-                    // 平行
-                    s = 0.0;
-                }
-
-                t = (b * s + f) / e;
-
-                if (t < 0.0) {
-                    t = 0.0;
-                    s = Math.max(0.0, Math.min(1.0, -c / a));
-                } else if (t > 1.0) {
-                    t = 1.0;
-                    s = Math.max(0.0, Math.min(1.0, (b - c) / a));
-                }
-            }
-        }
-
-        // 计算最近点坐标 (包含 Z)
-        // 注意：这里的 t 和 s 是在 XY 平面上算出来的比例
-        // 我们将其应用到 3D 坐标上，得到线段上的实际 3D 点
-        const ptA = {
-            x: p1.x + (p2.x - p1.x) * s,
-            y: p1.y + (p2.y - p1.y) * s,
-            z: p1.z + (p2.z - p1.z) * s
-        };
-
-        const ptB = {
-            x: p3.x + (p4.x - p3.x) * t,
-            y: p3.y + (p4.y - p3.y) * t,
-            z: p3.z + (p4.z - p3.z) * t
-        };
-
-        return {
-            distSq: posDistance2Dsqr(ptA, ptB),
-            ptA,
-            ptB
-        };
-    }
-
-    init() {
-        this.buildConnectivity();
-        const boundaryEdges = this.collectBoundaryEdges();
-        // Key: "polyA_polyB", Value: { targetPoly, dist, startPos, endPos }
-        const bestJumpPerPoly = new Map();
-
-        for (let i = 0; i < boundaryEdges.length; i++) {
-            for (let j = i + 1; j < boundaryEdges.length; j++) {
-                const edgeA = boundaryEdges[i];
-                const edgeB = boundaryEdges[j];
-
-                // 1. 排除同一个多边形的边
-                if (edgeA.polyIndex === edgeB.polyIndex) continue;
-                // B. [核心需求] 如果已经在同一个连通区域（能走过去），排除
-                //if (this.islandIds[edgeA.polyIndex] === this.islandIds[edgeB.polyIndex])continue; 
-                // 2. 排除已经是邻居的多边形 (可选，看你是否想要捷径)
-                //if (this.areNeighbors(edgeA.polyIndex, edgeB.polyIndex)) continue;
-
-                // 3. 计算两条线段在 XY 平面上的最近距离
-                // 我们主要关心水平距离是否足够近
-                const closestResult = this.closestPtSegmentSegment(
-                    edgeA.p1, edgeA.p2, 
-                    edgeB.p1, edgeB.p2
-                );
-
-                // 如果计算失败（平行重叠等极端情况），跳过
-                if (!closestResult) continue;
-
-                const { distSq, ptA, ptB } = closestResult;
-                // 5. 距离判断
-                if (distSq > this.jumpDist * this.jumpDist) continue;
-
-                //如果a和b在同一个可行走区域，并且没有跳跃的捷径，就跳过
-                if(this.islandIds[edgeA.polyIndex] === this.islandIds[edgeB.polyIndex]&&Math.abs(ptA.z-ptB.z)<=this.walkHeight)continue;
-                // 4. 高度判断 (Z轴)
-                const heightDiff = Math.abs(ptA.z - ptB.z);
-                if (heightDiff > this.jumpHeight) continue;
-                //同一点跳过
-                if (heightDiff <1&&distSq < 1) continue;
-                //Instance.DebugLine({start:ptA,end:ptB,duration:60,color:{r:255,g:0,b:0}});
-                // 6. 记录候选
-                this.updateBestCandidate(bestJumpPerPoly, edgeA.polyIndex, edgeB.polyIndex, distSq, ptA, ptB);
-            }
-        }
-        // 3. 根据 linkdist 过滤掉靠得太近的跳点
-        // 我们需要按距离从短到长排序，优先保留质量最高的跳点
-        const sortedCandidates = Array.from(bestJumpPerPoly.values()).sort((a, b) => a.distSq - b.distSq);
-        
-        const finalLinks = [];
-
-        for (const cand of sortedCandidates) {
-            const islandA = this.islandIds[cand.startPoly];
-            const islandB = this.islandIds[cand.endPoly];
-
-            // 检查在这两个区域(Island)之间，是否已经存在位置太近的跳点
-            let tooClose = false;
-            for (const existing of finalLinks) {
-                const exIslandA = this.islandIds[existing.PolyA];
-                const exIslandB = this.islandIds[existing.PolyB];
-
-                // 如果这两个跳点连接的是相同的两个岛屿
-                if ((islandA === exIslandA && islandB === exIslandB) || 
-                    (islandA === exIslandB && islandB === exIslandA)) {
-                    
-                    // 检查起点或终点的欧几里得距离是否小于 linkdist
-                    const dSqStart = posDistance3Dsqr(cand.startPos, existing.PosA);
-                    const dSqEnd = posDistance3Dsqr(cand.endPos, existing.PosB);
-
-                    if (dSqStart < this.linkdist * this.linkdist || dSqEnd < this.linkdist * this.linkdist) {
-                        tooClose = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!tooClose) {
-                finalLinks.push({
-                    PolyA: cand.startPoly,
-                    PolyB: cand.endPoly,
-                    PosA: cand.startPos,
-                    PosB: cand.endPos,
-                    cost: Math.sqrt(cand.distSq) * 1.5,
-                    type: (Math.abs(cand.startPos.z-cand.endPos.z)<=this.walkHeight?0:1)
-                });
-            }
-        }
-
-        this.links = finalLinks;
-        return this.links;
-    }
-    /**
-     * 计算多边形网格的连通分量
-     * 给互相连接的多边形打上相同的标识符码
-     */
-    buildConnectivity() {
-        const numPolys = this.mesh.polys.length;
-        this.islandIds = new Int32Array(numPolys).fill(-1);
-        let currentId = 0;
-
-        for (let i = 0; i < numPolys; i++) {
-            if (this.islandIds[i] !== -1) continue;
-
-            currentId++;
-            const stack = [i];
-            this.islandIds[i] = currentId;
-
-            while (stack.length > 0) {
-                const u = stack.pop();
-                //遍历该多边形的所有邻居
-                if(!u)break;
-                const neighbors = this.mesh.neighbors[u];
-                for (let v of neighbors) {
-                    //v是邻居多边形的索引。如果是负数表示边界，跳过
-                    if (v >= 0 && this.islandIds[v] === -1) {
-                        this.islandIds[v] = currentId;
-                        stack.push(v);
-                    }
-                }
-            }
-        }
-        Instance.Msg(`共有${currentId}个独立行走区域`);
-    }
-    /**
-     * @param {Map<string,any>} map
-     * @param {number} idxA
-     * @param {number} idxB
-     * @param {number} distSq 两个多边形边界边之间的最短平方距离
-     * @param {import("cs_script/point_script").Vector} ptA
-     * @param {import("cs_script/point_script").Vector} ptB
-     */
-    updateBestCandidate(map, idxA, idxB, distSq, ptA, ptB) {
-        //检查是否已经记录过这个多边形的跳跃目标
-        const id1 = Math.min(idxA, idxB);
-        const id2 = Math.max(idxA, idxB);
-        const key = `${id1}_${id2}`;
-
-        const existing = map.get(key);
-        //如果还没有记录，或者发现了一个更近的目标（distSq 更小）
-        if (!existing || distSq < existing.distSq) {
-            map.set(key, {
-                startPoly: idxA,
-                endPoly: idxB,
-                distSq: distSq,
-                startPos: { ...ptA },
-                endPos: { ...ptB }
-            });
-        }
-    }
-    debugDraw(duration = 10) {
-        for (const link of this.links) {
-            Instance.DebugLine({
-                start: link.PosA,
-                end: link.PosB,
-                color: { r: 0, g: (link.type==1?255:0), b: 255 },
-                duration
-            });
-            //Instance.DebugSphere({ center: link.PosA, radius: 4, color: { r: 0, g: 255, b: 0 }, duration });
-            //Instance.DebugSphere({ center: link.endPos, radius: 4, color: { r: 255, g: 0, b: 0 }, duration });
-            let poly = this.mesh.polys[link.PolyB];
-            for (let i = 0; i < poly.length; i++) {
-                const start = this.mesh.verts[poly[i]];
-                const end = this.mesh.verts[poly[(i + 1) % poly.length]];
-                Instance.DebugLine({start,end,color:{ r: 255, g: 0, b: 255 },duration});
-                //Instance.DebugSphere({center:start,radius:6,color,duration});
-            }
-            poly = this.mesh.polys[link.PolyA];
-            for (let i = 0; i < poly.length; i++) {
-                const start = this.mesh.verts[poly[i]];
-                const end = this.mesh.verts[poly[(i + 1) % poly.length]];
-                Instance.DebugLine({start,end,color:{ r: 255, g: 0, b: 255 },duration});
-                //Instance.DebugSphere({center:start,radius:6,color,duration});
-            }
-        }
-    }
-}
-
-class FunnelHeightFixer {
-    /**
-     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][]}} navMesh
-     * @param {{verts:{x:number,y:number,z:number}[], tris:number[][],meshes:number[][], triTopoly:number[]}} detailMesh
-     * @param {number} stepSize
-     */
-    constructor(navMesh, detailMesh, stepSize = 0.5) {
-        this.navMesh = navMesh;
-        this.detailMesh = detailMesh;
-        this.stepSize = stepSize;
-        const polyCount = detailMesh.meshes.length;
-        this.polyTriStart = new Uint16Array(polyCount);
-        this.polyTriEnd   = new Uint16Array(polyCount);
-        this.polyHasDetail = new Uint8Array(polyCount);
-        for (let i = 0; i < polyCount; i++) {
-            const mesh = detailMesh.meshes[i];
-            const baseTri  = mesh[2];
-            const triCount = mesh[3];
-            this.polyHasDetail[i] = (triCount > 0)?1:0;
-            this.polyTriStart[i] = baseTri;
-            this.polyTriEnd[i]   = baseTri + triCount; // [start, end)
-        }
-        this.triAabbMinX = [];
-        this.triAabbMinY = [];
-        this.triAabbMaxX = [];
-        this.triAabbMaxY = [];
-        const { verts, tris } = detailMesh;
-
-        for (let i = 0; i < tris.length; i++) {
-            const [ia, ib, ic] = tris[i];
-            const a = verts[ia];
-            const b = verts[ib];
-            const c = verts[ic];
-
-            const minX = Math.min(a.x, b.x, c.x);
-            const minY = Math.min(a.y, b.y, c.y);
-            const maxX = Math.max(a.x, b.x, c.x);
-            const maxY = Math.max(a.y, b.y, c.y);
-
-            this.triAabbMinX[i] = minX;
-            this.triAabbMinY[i] = minY;
-            this.triAabbMaxX[i] = maxX;
-            this.triAabbMaxY[i] = maxY;
-        }
-
-    }
-
-    /* ===============================
-       Public API
-    =============================== */
-
-    /**
-     * @param {{ x: number; y: number; z: any; }} pos
-     * @param {number} polyid
-     * @param {{ id: number; mode: number; }[]} polyPath
-     * @param {{ pos: { x: number; y: number; z: number; }; mode: number; }[]} out
-     */
-    addpoint(pos,polyid,polyPath,out)
+    constructor()
     {
-        while (polyid < polyPath.length &&!this._pointInPolyXY(pos, polyPath[polyid].id))polyid++;
+        this.Data = ""+`{"mesh":{"verts":[{"x":-2165,"y":-1045,"z":128},{"x":-2159,"y":-1057,"z":129},{"x":-2129,"y":-1057,"z":129},{"x":-2123,"y":-1045,"z":128},{"x":-1841,"y":-1045,"z":128},{"x":-1823,"y":-1045,"z":128},{"x":-1823,"y":-991,"z":129},{"x":-1847,"y":-1057,"z":129},{"x":-1859,"y":-949,"z":120},{"x":-1931,"y":-1045,"z":129},{"x":-1925,"y":-1057,"z":129},{"x":-2057,"y":-1045,"z":129},{"x":-2051,"y":-1057,"z":129},{"x":-1979,"y":-1057,"z":129},{"x":-1973,"y":-1045,"z":129},{"x":-2045,"y":-865,"z":116},{"x":`
++`-2033,"y":-859,"z":116},{"x":-2087,"y":-799,"z":116},{"x":-2039,"y":-949,"z":120},{"x":-2219,"y":-799,"z":120},{"x":-2213,"y":-1045,"z":128},{"x":-1865,"y":-853,"z":115},{"x":-1847,"y":-871,"z":117},{"x":-1793,"y":-823,"z":116},{"x":-1787,"y":-655,"z":129},{"x":-1805,"y":-643,"z":129},{"x":-2075,"y":-517,"z":107},{"x":-2099,"y":-529,"z":110},{"x":-2213,"y":-643,"z":128},{"x":-1805,"y":-445,"z":88},{"x":-2075,"y":-445,"z":89},{"x":-1985,"y":1181,"z":32},{"x":-1985,"y":1205,"z":32},{"x":-2051,"y":`
++`1271,"z":33},{"x":-2177,"y":1271,"z":40},{"x":-2177,"y":1259,"z":40},{"x":-1973,"y":1049,"z":34},{"x":-1973,"y":1181,"z":32},{"x":-1991,"y":1049,"z":35},{"x":-2195,"y":1253,"z":39},{"x":-1997,"y":1031,"z":35},{"x":-2183,"y":1049,"z":39},{"x":-2177,"y":1031,"z":40},{"x":-2201,"y":1049,"z":39},{"x":-1781,"y":1871,"z":0},{"x":-1775,"y":1859,"z":0},{"x":-1757,"y":1871,"z":0},{"x":-2135,"y":2045,"z":3},{"x":-2165,"y":2039,"z":4},{"x":-2165,"y":1991,"z":4},{"x":-1979,"y":1991,"z":-1},{"x":-2165,"y":24`
++`17,"z":25},{"x":-2165,"y":2345,"z":11},{"x":-2135,"y":2339,"z":7},{"x":-1979,"y":2417,"z":15},{"x":-1871,"y":2459,"z":22},{"x":-1967,"y":2453,"z":21},{"x":-1967,"y":2429,"z":16},{"x":-1871,"y":2321,"z":1},{"x":-2141,"y":2297,"z":4},{"x":-2135,"y":2081,"z":3},{"x":-1859,"y":1871,"z":0},{"x":-1757,"y":2315,"z":2},{"x":-1853,"y":2309,"z":1},{"x":-2195,"y":2297,"z":4},{"x":-2195,"y":2087,"z":4},{"x":-1931,"y":1805,"z":32},{"x":-1877,"y":1805,"z":0},{"x":-1877,"y":1859,"z":0},{"x":-2039,"y":1805,"z":`
++`32},{"x":-2033,"y":1793,"z":32},{"x":-1937,"y":1793,"z":32},{"x":-2165,"y":1799,"z":4},{"x":-2093,"y":2459,"z":69},{"x":-2117,"y":2453,"z":62},{"x":-2117,"y":2441,"z":63},{"x":-2081,"y":2429,"z":65},{"x":-1979,"y":2429,"z":65},{"x":-1979,"y":2459,"z":65},{"x":-2027,"y":2459,"z":68},{"x":-2087,"y":2501,"z":69},{"x":-2027,"y":2495,"z":69},{"x":-1805,"y":2645,"z":32},{"x":-1823,"y":2645,"z":33},{"x":-1829,"y":2615,"z":33},{"x":-1757,"y":2675,"z":32},{"x":-1793,"y":2669,"z":32},{"x":-1865,"y":2651,"`
++`z":34},{"x":-1823,"y":2687,"z":33},{"x":-1829,"y":2699,"z":33},{"x":-2021,"y":2513,"z":31},{"x":-2015,"y":2471,"z":30},{"x":-1979,"y":2471,"z":25},{"x":-1865,"y":2471,"z":25},{"x":-1859,"y":2615,"z":34},{"x":-1757,"y":2471,"z":28},{"x":-2105,"y":2705,"z":36},{"x":-2111,"y":2513,"z":35},{"x":-1805,"y":2687,"z":32},{"x":-1787,"y":2759,"z":33},{"x":-1799,"y":2771,"z":32},{"x":-2003,"y":3065,"z":33},{"x":-1973,"y":3065,"z":32},{"x":-1973,"y":3125,"z":33},{"x":-2015,"y":3053,"z":33},{"x":-2111,"y":31`
++`25,"z":36},{"x":-1787,"y":2807,"z":32},{"x":-1757,"y":2807,"z":33},{"x":-1757,"y":2873,"z":34},{"x":-1793,"y":2999,"z":32},{"x":-1859,"y":2999,"z":34},{"x":-1859,"y":2963,"z":34},{"x":-1799,"y":2795,"z":31},{"x":-1889,"y":2873,"z":32},{"x":-1757,"y":2759,"z":33},{"x":-1895,"y":2957,"z":38},{"x":-1895,"y":3011,"z":34},{"x":-1979,"y":2999,"z":32},{"x":-1751,"y":2891,"z":35},{"x":-1751,"y":2921,"z":33},{"x":-1865,"y":2933,"z":38},{"x":-1859,"y":2891,"z":35},{"x":-2009,"y":3005,"z":32},{"x":-1901,"y`
++`":2927,"z":36},{"x":-2033,"y":2813,"z":32},{"x":-2105,"y":2813,"z":34},{"x":-2021,"y":2825,"z":32},{"x":-2105,"y":2897,"z":33},{"x":-2021,"y":2891,"z":32},{"x":-2033,"y":2831,"z":90},{"x":-2033,"y":2885,"z":90},{"x":-2093,"y":2885,"z":90},{"x":-2093,"y":2825,"z":90},{"x":-1799,"y":-127,"z":9},{"x":-1781,"y":-103,"z":8},{"x":-1793,"y":-85,"z":8},{"x":-1853,"y":-25,"z":0},{"x":-2033,"y":-25,"z":9},{"x":-2039,"y":-115,"z":8},{"x":-2069,"y":-121,"z":8},{"x":-2045,"y":491,"z":20},{"x":-2057,"y":491,"`
++`z":32},{"x":-2057,"y":461,"z":27},{"x":-2045,"y":461,"z":20},{"x":-1745,"y":-103,"z":19},{"x":-1727,"y":-115,"z":32},{"x":-1709,"y":-103,"z":8},{"x":-1715,"y":419,"z":1},{"x":-1793,"y":143,"z":0},{"x":-2045,"y":449,"z":9},{"x":-2057,"y":449,"z":21},{"x":-2063,"y":401,"z":8},{"x":-1793,"y":497,"z":18},{"x":-2045,"y":503,"z":12},{"x":-2057,"y":155,"z":9},{"x":-2039,"y":143,"z":8},{"x":-2057,"y":533,"z":63},{"x":-2057,"y":515,"z":63},{"x":-1793,"y":515,"z":61},{"x":-1793,"y":533,"z":61},{"x":-1547,`
++`"y":971,"z":35},{"x":-1547,"y":995,"z":36},{"x":-1565,"y":1001,"z":35},{"x":-1613,"y":965,"z":33},{"x":-1721,"y":1007,"z":33},{"x":-1733,"y":1001,"z":35},{"x":-1733,"y":971,"z":36},{"x":-1715,"y":965,"z":34},{"x":-1829,"y":593,"z":32},{"x":-1811,"y":545,"z":32},{"x":-1787,"y":545,"z":32},{"x":-1715,"y":701,"z":32},{"x":-1757,"y":689,"z":32},{"x":-1721,"y":1043,"z":32},{"x":-1565,"y":1043,"z":35},{"x":-1799,"y":689,"z":33},{"x":-1805,"y":701,"z":35},{"x":-1913,"y":689,"z":36},{"x":-1319,"y":545,"`
++`z":36},{"x":-1319,"y":599,"z":39},{"x":-1409,"y":599,"z":34},{"x":-1919,"y":599,"z":33},{"x":-2057,"y":599,"z":37},{"x":-2057,"y":545,"z":36},{"x":-1877,"y":545,"z":32},{"x":-1877,"y":581,"z":32},{"x":-1781,"y":533,"z":32},{"x":-1547,"y":533,"z":33},{"x":-1541,"y":545,"z":32},{"x":-1613,"y":701,"z":32},{"x":-1415,"y":689,"z":37},{"x":-1571,"y":689,"z":32},{"x":-1847,"y":1247,"z":32},{"x":-1847,"y":1265,"z":33},{"x":-1931,"y":1397,"z":32},{"x":-1775,"y":1007,"z":39},{"x":-1847,"y":971,"z":40},{"x`
++`":-1721,"y":1301,"z":38},{"x":-1727,"y":1253,"z":34},{"x":-1667,"y":1271,"z":36},{"x":-1673,"y":1397,"z":42},{"x":-1805,"y":1325,"z":38},{"x":-1769,"y":1307,"z":38},{"x":-1787,"y":1253,"z":33},{"x":-1805,"y":1223,"z":32},{"x":-2039,"y":1277,"z":33},{"x":-1949,"y":1049,"z":34},{"x":-1943,"y":1031,"z":34},{"x":-1853,"y":1031,"z":38},{"x":-1775,"y":1049,"z":36},{"x":-1559,"y":1253,"z":37},{"x":-1565,"y":1271,"z":38},{"x":-1937,"y":1433,"z":33},{"x":-2033,"y":1433,"z":33},{"x":-1727,"y":1055,"z":32}`
++`,{"x":-1523,"y":1049,"z":36},{"x":-1523,"y":1253,"z":38},{"x":-1859,"y":-937,"z":154},{"x":-1859,"y":-871,"z":153},{"x":-1877,"y":-865,"z":156},{"x":-2033,"y":-871,"z":160},{"x":-2033,"y":-937,"z":161},{"x":-2003,"y":3053,"z":72},{"x":-2003,"y":3017,"z":70},{"x":-1937,"y":3017,"z":71},{"x":-1937,"y":3053,"z":72},{"x":-1925,"y":3053,"z":106},{"x":-1925,"y":3023,"z":106},{"x":-1895,"y":3023,"z":106},{"x":-1895,"y":3053,"z":106},{"x":-1859,"y":539,"z":106},{"x":-1847,"y":539,"z":106},{"x":-1823,"y"`
++`:545,"z":106},{"x":-1829,"y":581,"z":106},{"x":-1865,"y":575,"z":106},{"x":-1847,"y":-943,"z":120},{"x":-1799,"y":-1051,"z":129},{"x":-1769,"y":-655,"z":129},{"x":-1619,"y":-823,"z":116},{"x":-1619,"y":-805,"z":116},{"x":-1799,"y":-1075,"z":129},{"x":-1607,"y":-1075,"z":128},{"x":-1607,"y":-823,"z":116},{"x":-1763,"y":2327,"z":103},{"x":-1763,"y":2423,"z":102},{"x":-1853,"y":2423,"z":103},{"x":-1859,"y":2327,"z":103},{"x":-1745,"y":2459,"z":65},{"x":-1859,"y":2459,"z":65},{"x":-1859,"y":2441,"z"`
++`:63},{"x":-1721,"y":2429,"z":63},{"x":-1721,"y":2873,"z":63},{"x":-1745,"y":2873,"z":63},{"x":-1853,"y":2651,"z":78},{"x":-1853,"y":2627,"z":78},{"x":-1835,"y":2627,"z":78},{"x":-1835,"y":2651,"z":78},{"x":-1775,"y":1289,"z":71},{"x":-1793,"y":1313,"z":70},{"x":-1805,"y":1313,"z":71},{"x":-1835,"y":1259,"z":71},{"x":-1805,"y":1235,"z":70},{"x":-1829,"y":2675,"z":77},{"x":-1829,"y":2657,"z":77},{"x":-1805,"y":2657,"z":77},{"x":-1805,"y":2675,"z":77},{"x":-1679,"y":-193,"z":164},{"x":-1667,"y":-15`
++`7,"z":164},{"x":-1673,"y":-169,"z":164},{"x":-1691,"y":-187,"z":164},{"x":-1697,"y":-163,"z":164},{"x":-1697,"y":-229,"z":164},{"x":-1769,"y":-235,"z":164},{"x":-1679,"y":-235,"z":164},{"x":-1625,"y":-229,"z":164},{"x":-1613,"y":-223,"z":164},{"x":-1613,"y":-151,"z":164},{"x":-1691,"y":-151,"z":159},{"x":-1691,"y":-313,"z":164},{"x":-1691,"y":-247,"z":164},{"x":-1763,"y":-247,"z":164},{"x":-1769,"y":-319,"z":158},{"x":-1793,"y":-127,"z":158},{"x":-1415,"y":-151,"z":159},{"x":-1415,"y":-127,"z":1`
++`58},{"x":-1793,"y":-643,"z":158},{"x":-1769,"y":-643,"z":159},{"x":-1325,"y":41,"z":8},{"x":-1277,"y":41,"z":8},{"x":-1277,"y":53,"z":8},{"x":-1277,"y":239,"z":8},{"x":-1277,"y":281,"z":8},{"x":-1289,"y":293,"z":8},{"x":-1499,"y":-121,"z":8},{"x":-1487,"y":-103,"z":8},{"x":-1487,"y":-61,"z":8},{"x":-1697,"y":-103,"z":8},{"x":-1691,"y":-121,"z":8},{"x":-1439,"y":59,"z":8},{"x":-1421,"y":53,"z":8},{"x":-1385,"y":95,"z":4},{"x":-1253,"y":65,"z":8},{"x":-1367,"y":95,"z":8},{"x":-1475,"y":-55,"z":8},`
++`{"x":-1469,"y":11,"z":8},{"x":-1289,"y":347,"z":8},{"x":-1301,"y":413,"z":8},{"x":-1313,"y":425,"z":8},{"x":-1781,"y":509,"z":33},{"x":-1541,"y":497,"z":25},{"x":-1259,"y":179,"z":10},{"x":-1319,"y":503,"z":8},{"x":-1787,"y":2795,"z":77},{"x":-1787,"y":2771,"z":77},{"x":-1763,"y":2771,"z":77},{"x":-1763,"y":2795,"z":77},{"x":-1295,"y":2201,"z":2},{"x":-1283,"y":2207,"z":3},{"x":-1301,"y":2237,"z":1},{"x":-1619,"y":1607,"z":2},{"x":-1607,"y":1625,"z":2},{"x":-1607,"y":1655,"z":2},{"x":-1655,"y":1`
++`697,"z":2},{"x":-1721,"y":1607,"z":3},{"x":-1385,"y":2081,"z":3},{"x":-1355,"y":2087,"z":3},{"x":-1355,"y":2117,"z":2},{"x":-1355,"y":2201,"z":1},{"x":-1373,"y":2213,"z":0},{"x":-1331,"y":2237,"z":1},{"x":-1325,"y":2129,"z":3},{"x":-1595,"y":1757,"z":2},{"x":-1577,"y":1733,"z":3},{"x":-1541,"y":1733,"z":1},{"x":-1691,"y":1859,"z":0},{"x":-1775,"y":1799,"z":3},{"x":-1721,"y":1793,"z":3},{"x":-1691,"y":1841,"z":1},{"x":-1349,"y":2261,"z":1},{"x":-1355,"y":2315,"z":1},{"x":-1385,"y":2327,"z":0},{"x`
++`":-1673,"y":2501,"z":8},{"x":-1679,"y":2579,"z":6},{"x":-1709,"y":2579,"z":7},{"x":-1709,"y":2423,"z":10},{"x":-1745,"y":2417,"z":13},{"x":-1745,"y":2321,"z":2},{"x":-1385,"y":1895,"z":6},{"x":-1493,"y":1901,"z":0},{"x":-1493,"y":1877,"z":0},{"x":-1469,"y":2573,"z":3},{"x":-1493,"y":2585,"z":3},{"x":-1589,"y":2579,"z":3},{"x":-1595,"y":2501,"z":2},{"x":-1505,"y":1865,"z":0},{"x":-1523,"y":1943,"z":0},{"x":-1655,"y":1715,"z":2},{"x":-1385,"y":2387,"z":2},{"x":-1355,"y":2399,"z":3},{"x":-1355,"y":`
++`2573,"z":4},{"x":-1613,"y":1757,"z":2},{"x":-1649,"y":1787,"z":0},{"x":-1661,"y":1883,"z":0},{"x":-1553,"y":1943,"z":-1},{"x":-1277,"y":-277,"z":134},{"x":-1265,"y":-253,"z":162},{"x":-1295,"y":-253,"z":162},{"x":-1289,"y":-277,"z":135},{"x":-995,"y":-1015,"z":128},{"x":-1013,"y":-997,"z":128},{"x":-1031,"y":-991,"z":128},{"x":-1025,"y":-1063,"z":128},{"x":-995,"y":-1063,"z":128},{"x":-1559,"y":-223,"z":130},{"x":-1571,"y":-199,"z":130},{"x":-1601,"y":-199,"z":130},{"x":-1607,"y":-235,"z":129},{`
++`"x":-1307,"y":-265,"z":128},{"x":-1349,"y":-265,"z":130},{"x":-1541,"y":-223,"z":129},{"x":-1679,"y":-319,"z":128},{"x":-1109,"y":-223,"z":129},{"x":-1145,"y":-223,"z":128},{"x":-1151,"y":-265,"z":128},{"x":-1187,"y":-265,"z":128},{"x":-1193,"y":-253,"z":129},{"x":-1253,"y":-253,"z":129},{"x":-1259,"y":-277,"z":128},{"x":-1091,"y":-211,"z":130},{"x":-995,"y":-283,"z":129},{"x":-995,"y":-217,"z":129},{"x":-1013,"y":-199,"z":128},{"x":-1031,"y":-1075,"z":128},{"x":-1007,"y":-967,"z":128},{"x":-100`
++`1,"y":-979,"z":128},{"x":-935,"y":-919,"z":120},{"x":-1013,"y":-157,"z":135},{"x":-1085,"y":-169,"z":130},{"x":-1055,"y":-415,"z":129},{"x":-1019,"y":-403,"z":129},{"x":-1031,"y":-973,"z":128},{"x":-971,"y":-709,"z":128},{"x":-1049,"y":-631,"z":127},{"x":-1679,"y":-247,"z":128},{"x":-971,"y":-631,"z":128},{"x":-971,"y":-409,"z":128},{"x":-977,"y":-289,"z":130},{"x":-1415,"y":-199,"z":129},{"x":-1415,"y":-163,"z":130},{"x":-1529,"y":-163,"z":131},{"x":-1529,"y":-211,"z":129},{"x":-1757,"y":-649,"`
++`z":129},{"x":-929,"y":-715,"z":121},{"x":-1757,"y":-325,"z":129},{"x":-1061,"y":-595,"z":128},{"x":-1667,"y":2591,"z":5},{"x":-1415,"y":2741,"z":15},{"x":-1355,"y":2747,"z":17},{"x":-1355,"y":2777,"z":15},{"x":-1505,"y":2867,"z":6},{"x":-1535,"y":2777,"z":7},{"x":-1541,"y":2741,"z":7},{"x":-1595,"y":2591,"z":4},{"x":-1493,"y":2657,"z":5},{"x":-1475,"y":2669,"z":7},{"x":-1421,"y":2669,"z":13},{"x":-1565,"y":2705,"z":6},{"x":-1601,"y":2807,"z":11},{"x":-1709,"y":2867,"z":19},{"x":-1631,"y":2729,"z`
++`":10},{"x":-1625,"y":2777,"z":12},{"x":-1619,"y":1877,"z":54},{"x":-1637,"y":1883,"z":46},{"x":-1637,"y":1865,"z":53},{"x":-1619,"y":1853,"z":55},{"x":-1625,"y":1829,"z":35},{"x":-1643,"y":1871,"z":43},{"x":-1667,"y":1865,"z":36},{"x":-1679,"y":1847,"z":37},{"x":-1655,"y":1805,"z":37},{"x":-1619,"y":1811,"z":35},{"x":-1583,"y":1901,"z":52},{"x":-1607,"y":1901,"z":41},{"x":-1589,"y":1847,"z":55},{"x":-1559,"y":1859,"z":52},{"x":-1613,"y":1829,"z":53},{"x":-1535,"y":1703,"z":234},{"x":-1565,"y":17`
++`45,"z":232},{"x":-1583,"y":1745,"z":231},{"x":-1643,"y":1607,"z":233},{"x":-1367,"y":1763,"z":245},{"x":-1355,"y":1763,"z":232},{"x":-1355,"y":1853,"z":232},{"x":-1373,"y":1853,"z":232},{"x":-1367,"y":1751,"z":259},{"x":-1379,"y":1697,"z":232},{"x":-1355,"y":1637,"z":232},{"x":-1355,"y":1751,"z":260},{"x":-1385,"y":1631,"z":231},{"x":-1385,"y":1607,"z":231},{"x":-1613,"y":1679,"z":61},{"x":-1613,"y":1667,"z":59},{"x":-1595,"y":1667,"z":60},{"x":-1643,"y":1703,"z":60},{"x":-1565,"y":1703,"z":60},`
++`{"x":-1595,"y":1745,"z":60},{"x":-1613,"y":1745,"z":60},{"x":-1619,"y":2741,"z":65},{"x":-1583,"y":2717,"z":65},{"x":-1565,"y":2717,"z":65},{"x":-1547,"y":2777,"z":64},{"x":-1589,"y":2795,"z":64},{"x":-1607,"y":2789,"z":64},{"x":-1571,"y":-181,"z":175},{"x":-1577,"y":-163,"z":174},{"x":-1595,"y":-163,"z":174},{"x":-1595,"y":-187,"z":175},{"x":-1553,"y":1931,"z":29},{"x":-1583,"y":1913,"z":41},{"x":-1571,"y":1907,"z":38},{"x":-1523,"y":1931,"z":27},{"x":-1547,"y":1853,"z":42},{"x":-1505,"y":1877,`
++`"z":26},{"x":-1505,"y":1901,"z":27},{"x":-1559,"y":-187,"z":175},{"x":-1559,"y":-211,"z":175},{"x":-1541,"y":-211,"z":175},{"x":-1541,"y":-187,"z":175},{"x":-1535,"y":533,"z":63},{"x":-1535,"y":515,"z":63},{"x":-1319,"y":515,"z":59},{"x":-1319,"y":533,"z":59},{"x":-1469,"y":1787,"z":169},{"x":-1529,"y":1721,"z":169},{"x":-1505,"y":1709,"z":170},{"x":-1385,"y":1709,"z":170},{"x":-1385,"y":1877,"z":169},{"x":-1469,"y":1799,"z":170},{"x":-1193,"y":1151,"z":32},{"x":-1163,"y":1169,"z":32},{"x":-1151`
++`,"y":1193,"z":32},{"x":-1205,"y":1193,"z":32},{"x":-1247,"y":1151,"z":32},{"x":-1331,"y":1169,"z":33},{"x":-1337,"y":1193,"z":33},{"x":-1379,"y":1199,"z":34},{"x":-1019,"y":1325,"z":-111},{"x":-1019,"y":1397,"z":-113},{"x":-1031,"y":1397,"z":-113},{"x":-1037,"y":1319,"z":-111},{"x":-1283,"y":1049,"z":32},{"x":-1277,"y":1031,"z":32},{"x":-1211,"y":1031,"z":8},{"x":-1127,"y":1055,"z":-24},{"x":-1283,"y":1193,"z":32},{"x":-1289,"y":1169,"z":32},{"x":-1151,"y":1277,"z":32},{"x":-1193,"y":1271,"z":32`
++`},{"x":-1247,"y":1139,"z":24},{"x":-1325,"y":1049,"z":38},{"x":-1085,"y":1085,"z":-40},{"x":-1049,"y":1139,"z":-64},{"x":-1151,"y":1169,"z":-48},{"x":-1193,"y":1139,"z":-8},{"x":-1067,"y":1439,"z":-112},{"x":-1205,"y":1445,"z":-109},{"x":-1205,"y":1337,"z":-107},{"x":-1139,"y":1319,"z":-111},{"x":-1379,"y":1271,"z":36},{"x":-1511,"y":1271,"z":39},{"x":-1031,"y":1217,"z":-96},{"x":-1139,"y":1193,"z":-72},{"x":-1511,"y":1031,"z":37},{"x":-1331,"y":1031,"z":39},{"x":-1469,"y":2645,"z":61},{"x":-145`
++`7,"y":2657,"z":60},{"x":-1481,"y":2651,"z":60},{"x":-1481,"y":2591,"z":46},{"x":-1469,"y":2591,"z":59},{"x":-1439,"y":-97,"z":82},{"x":-1451,"y":-115,"z":90},{"x":-1433,"y":-115,"z":92},{"x":-1421,"y":-103,"z":89},{"x":-1427,"y":-79,"z":68},{"x":-1397,"y":11,"z":61},{"x":-1409,"y":35,"z":61},{"x":-1421,"y":23,"z":67},{"x":-1415,"y":-1,"z":66},{"x":-1463,"y":-73,"z":69},{"x":-1457,"y":-97,"z":69},{"x":-1439,"y":-49,"z":70},{"x":-1463,"y":-55,"z":69},{"x":-1451,"y":23,"z":69},{"x":-1463,"y":-37,"z`
++`":69},{"x":-1445,"y":-37,"z":69},{"x":-1415,"y":-91,"z":79},{"x":-1235,"y":2711,"z":114},{"x":-1289,"y":2711,"z":120},{"x":-1295,"y":2699,"z":128},{"x":-1307,"y":2663,"z":128},{"x":-1289,"y":2645,"z":123},{"x":-1235,"y":2597,"z":102},{"x":-1355,"y":2705,"z":124},{"x":-1355,"y":2723,"z":124},{"x":-1409,"y":2723,"z":125},{"x":-1409,"y":2639,"z":121},{"x":-1457,"y":2639,"z":107},{"x":-1457,"y":2597,"z":107},{"x":-1331,"y":2663,"z":128},{"x":-1331,"y":2693,"z":128},{"x":-1355,"y":2651,"z":119},{"x":`
++`-1289,"y":2597,"z":102},{"x":-1355,"y":2585,"z":119},{"x":-1373,"y":1979,"z":232},{"x":-1373,"y":1895,"z":232},{"x":-1355,"y":1895,"z":232},{"x":-1355,"y":1979,"z":232},{"x":-1373,"y":2075,"z":232},{"x":-1373,"y":2021,"z":232},{"x":-1355,"y":2021,"z":232},{"x":-1343,"y":2081,"z":232},{"x":-1373,"y":2345,"z":45},{"x":-1373,"y":2327,"z":45},{"x":-1355,"y":2327,"z":44},{"x":-1355,"y":2345,"z":44},{"x":-1289,"y":1247,"z":70},{"x":-1319,"y":1253,"z":69},{"x":-1319,"y":1229,"z":69},{"x":-1295,"y":1181`
++`,"z":70},{"x":-1331,"y":1205,"z":70},{"x":-1325,"y":1181,"z":69},{"x":-1331,"y":1223,"z":70},{"x":-1337,"y":1271,"z":71},{"x":-1367,"y":1271,"z":71},{"x":-1367,"y":1211,"z":71},{"x":-1301,"y":2111,"z":232},{"x":-1301,"y":2201,"z":232},{"x":-1337,"y":2207,"z":232},{"x":-1343,"y":2111,"z":232},{"x":-1301,"y":2243,"z":232},{"x":-1301,"y":2321,"z":232},{"x":-1337,"y":2327,"z":232},{"x":-1343,"y":2237,"z":232},{"x":-1301,"y":2369,"z":230},{"x":-1301,"y":2453,"z":228},{"x":-1337,"y":2459,"z":228},{"x"`
++`:-1343,"y":2369,"z":230},{"x":-1301,"y":2501,"z":227},{"x":-1301,"y":2579,"z":225},{"x":-1337,"y":2585,"z":225},{"x":-1343,"y":2495,"z":227},{"x":-1343,"y":2639,"z":224},{"x":-1343,"y":2621,"z":224},{"x":-1301,"y":2627,"z":224},{"x":-1301,"y":2645,"z":216},{"x":-1307,"y":2087,"z":272},{"x":-1307,"y":2099,"z":273},{"x":-1325,"y":2105,"z":271},{"x":-1331,"y":2081,"z":275},{"x":-1331,"y":2231,"z":275},{"x":-1331,"y":2213,"z":275},{"x":-1313,"y":2213,"z":279},{"x":-1313,"y":2231,"z":278},{"x":-821,"`
++`y":2483,"z":-65},{"x":-821,"y":2513,"z":-65},{"x":-839,"y":2495,"z":-64},{"x":-839,"y":2477,"z":-54},{"x":-833,"y":2417,"z":-65},{"x":-875,"y":2549,"z":-48},{"x":-887,"y":2561,"z":-55},{"x":-905,"y":2561,"z":-47},{"x":-875,"y":2525,"z":-41},{"x":-923,"y":2423,"z":-43},{"x":-899,"y":2417,"z":-54},{"x":-887,"y":2417,"z":-54},{"x":-869,"y":2417,"z":-65},{"x":-851,"y":2495,"z":-42},{"x":-827,"y":2555,"z":-64},{"x":-845,"y":2555,"z":-64},{"x":-857,"y":2519,"z":-41},{"x":-1265,"y":2195,"z":3},{"x":-85`
++`1,"y":2579,"z":-71},{"x":-851,"y":2477,"z":-41},{"x":-905,"y":2465,"z":-41},{"x":-1229,"y":2087,"z":13},{"x":-1223,"y":2057,"z":14},{"x":-1181,"y":2063,"z":9},{"x":-1169,"y":2135,"z":4},{"x":-1049,"y":2561,"z":18},{"x":-1055,"y":2573,"z":23},{"x":-1109,"y":2579,"z":45},{"x":-1223,"y":2591,"z":65},{"x":-1289,"y":2585,"z":67},{"x":-1313,"y":2285,"z":3},{"x":-959,"y":2369,"z":-50},{"x":-917,"y":2411,"z":-57},{"x":-1121,"y":2135,"z":-1},{"x":-1115,"y":2165,"z":-3},{"x":-1283,"y":2297,"z":6},{"x":-91`
++`7,"y":2465,"z":-25},{"x":-917,"y":2531,"z":-25},{"x":-929,"y":2537,"z":-25},{"x":-1289,"y":2153,"z":4},{"x":-1283,"y":2087,"z":10},{"x":-929,"y":2561,"z":-30},{"x":-1073,"y":2165,"z":-15},{"x":-1067,"y":2153,"z":-16},{"x":-965,"y":2249,"z":-63},{"x":-1109,"y":2711,"z":89},{"x":-1223,"y":2711,"z":88},{"x":-1331,"y":2357,"z":267},{"x":-1331,"y":2333,"z":270},{"x":-1313,"y":2339,"z":275},{"x":-1307,"y":2357,"z":267},{"x":-1331,"y":2489,"z":249},{"x":-1331,"y":2465,"z":260},{"x":-1307,"y":2465,"z":2`
++`51},{"x":-1307,"y":2489,"z":249},{"x":-1331,"y":2615,"z":267},{"x":-1331,"y":2597,"z":267},{"x":-1313,"y":2597,"z":271},{"x":-1313,"y":2615,"z":267},{"x":-1235,"y":2057,"z":232},{"x":-1235,"y":2075,"z":232},{"x":-1247,"y":2081,"z":232},{"x":-1301,"y":2081,"z":232},{"x":-1301,"y":2057,"z":232},{"x":-1271,"y":1271,"z":104},{"x":-1277,"y":1217,"z":104},{"x":-1271,"y":1205,"z":104},{"x":-1211,"y":1205,"z":104},{"x":-1205,"y":1271,"z":104},{"x":-1121,"y":1529,"z":-76},{"x":-1139,"y":1505,"z":-77},{"x`
++`":-1127,"y":1499,"z":-76},{"x":-1061,"y":1517,"z":-76},{"x":-1133,"y":1487,"z":-76},{"x":-1067,"y":1451,"z":-76},{"x":-1205,"y":1517,"z":-77},{"x":-1145,"y":1493,"z":-77},{"x":-1205,"y":1463,"z":-77},{"x":-1139,"y":2057,"z":40},{"x":-1139,"y":2123,"z":39},{"x":-1163,"y":2123,"z":40},{"x":-1175,"y":2057,"z":40},{"x":-1127,"y":2117,"z":65},{"x":-1127,"y":2057,"z":64},{"x":-1061,"y":2057,"z":64},{"x":-1055,"y":2117,"z":65},{"x":-1109,"y":2153,"z":43},{"x":-1109,"y":2129,"z":43},{"x":-1079,"y":2129,`
++`"z":43},{"x":-1079,"y":2153,"z":43},{"x":-1097,"y":2591,"z":139},{"x":-1091,"y":2579,"z":139},{"x":-1061,"y":2585,"z":138},{"x":-1061,"y":2711,"z":139},{"x":-1097,"y":2711,"z":139},{"x":-779,"y":1391,"z":-112},{"x":-773,"y":1379,"z":-112},{"x":-731,"y":1415,"z":-113},{"x":-1055,"y":1445,"z":-113},{"x":-1049,"y":1529,"z":-109},{"x":-899,"y":1331,"z":-108},{"x":-863,"y":1331,"z":-110},{"x":-857,"y":1391,"z":-112},{"x":-905,"y":1319,"z":-107},{"x":-857,"y":1517,"z":-109},{"x":-899,"y":1517,"z":-109`
++`},{"x":-725,"y":1529,"z":-108},{"x":-851,"y":1529,"z":-108},{"x":-905,"y":1529,"z":-109},{"x":-827,"y":2411,"z":-80},{"x":-1067,"y":2129,"z":-11},{"x":-1043,"y":2117,"z":-11},{"x":-887,"y":2093,"z":-80},{"x":-881,"y":2057,"z":-81},{"x":-749,"y":2057,"z":-112},{"x":-743,"y":2093,"z":-113},{"x":-1043,"y":2087,"z":-10},{"x":-707,"y":2093,"z":-115},{"x":-713,"y":2297,"z":-114},{"x":-977,"y":-421,"z":166},{"x":-1001,"y":-415,"z":167},{"x":-1043,"y":-421,"z":165},{"x":-1049,"y":-589,"z":168},{"x":-104`
++`3,"y":-619,"z":167},{"x":-977,"y":-613,"z":168},{"x":-983,"y":-1075,"z":129},{"x":-797,"y":-817,"z":116},{"x":-899,"y":-715,"z":121},{"x":-809,"y":-1075,"z":129},{"x":-791,"y":-1063,"z":128},{"x":-971,"y":-187,"z":140},{"x":-1001,"y":-193,"z":145},{"x":-983,"y":-205,"z":145},{"x":-419,"y":-1015,"z":106},{"x":-413,"y":-1063,"z":103},{"x":-317,"y":-1063,"z":81},{"x":-197,"y":-967,"z":51},{"x":-431,"y":-1069,"z":128},{"x":-431,"y":-1033,"z":128},{"x":-551,"y":-1033,"z":128},{"x":-581,"y":-1063,"z":`
++`128},{"x":-887,"y":-709,"z":128},{"x":-557,"y":-1021,"z":128},{"x":-767,"y":-1063,"z":128},{"x":-311,"y":-1075,"z":78},{"x":-761,"y":-1075,"z":128},{"x":-587,"y":-1075,"z":128},{"x":-887,"y":-649,"z":130},{"x":-197,"y":-649,"z":49},{"x":-857,"y":2633,"z":98},{"x":-857,"y":2597,"z":97},{"x":-743,"y":2597,"z":98},{"x":-743,"y":2633,"z":97},{"x":-737,"y":2567,"z":-82},{"x":-761,"y":2579,"z":-83},{"x":-815,"y":2579,"z":-82},{"x":-587,"y":2087,"z":-118},{"x":-581,"y":2075,"z":-118},{"x":-527,"y":2129`
++`,"z":-123},{"x":-815,"y":2417,"z":-83},{"x":-521,"y":2453,"z":-88},{"x":-575,"y":2453,"z":-88},{"x":-605,"y":2465,"z":-87},{"x":-605,"y":2567,"z":-84},{"x":-503,"y":1373,"z":-112},{"x":-497,"y":1361,"z":-120},{"x":-467,"y":1391,"z":-126},{"x":-383,"y":1595,"z":-127},{"x":-413,"y":1583,"z":-126},{"x":-437,"y":1571,"z":-126},{"x":-365,"y":1481,"z":-126},{"x":-323,"y":1523,"z":-126},{"x":-335,"y":1613,"z":-128},{"x":-461,"y":1589,"z":-125},{"x":-503,"y":1589,"z":-125},{"x":-383,"y":1637,"z":-127},{`
++`"x":-539,"y":1373,"z":-113},{"x":-503,"y":1475,"z":-112},{"x":-545,"y":1481,"z":-112},{"x":-269,"y":1487,"z":-125},{"x":-269,"y":1523,"z":-125},{"x":-773,"y":1319,"z":-112},{"x":-545,"y":1319,"z":-109},{"x":-365,"y":1391,"z":-126},{"x":-545,"y":1529,"z":-111},{"x":-755,"y":455,"z":24},{"x":-749,"y":431,"z":24},{"x":-725,"y":431,"z":24},{"x":-731,"y":467,"z":24},{"x":-695,"y":263,"z":8},{"x":-689,"y":245,"z":8},{"x":-659,"y":245,"z":8},{"x":-437,"y":-49,"z":-1},{"x":-431,"y":-61,"z":-1},{"x":-395`
++`,"y":-55,"z":-1},{"x":-395,"y":227,"z":0},{"x":-503,"y":197,"z":0},{"x":-713,"y":413,"z":16},{"x":-557,"y":413,"z":6},{"x":-641,"y":503,"z":9},{"x":-725,"y":503,"z":10},{"x":-719,"y":323,"z":9},{"x":-707,"y":263,"z":9},{"x":-647,"y":203,"z":8},{"x":-317,"y":299,"z":1},{"x":-419,"y":407,"z":-4},{"x":-503,"y":-49,"z":1},{"x":-725,"y":2633,"z":39},{"x":-731,"y":2549,"z":41},{"x":-725,"y":2537,"z":41},{"x":-605,"y":2537,"z":40},{"x":-605,"y":2603,"z":39},{"x":-665,"y":2633,"z":39},{"x":-359,"y":2603`
++`,"z":27},{"x":-359,"y":2507,"z":26},{"x":-263,"y":2507,"z":26},{"x":-263,"y":2615,"z":25},{"x":-479,"y":2615,"z":26},{"x":-677,"y":203,"z":57},{"x":-659,"y":203,"z":56},{"x":-665,"y":233,"z":56},{"x":-689,"y":233,"z":57},{"x":-641,"y":623,"z":9},{"x":-641,"y":545,"z":9},{"x":-629,"y":539,"z":8},{"x":-629,"y":635,"z":8},{"x":-503,"y":719,"z":1},{"x":-533,"y":713,"z":8},{"x":-539,"y":635,"z":8},{"x":-257,"y":419,"z":-3},{"x":-245,"y":419,"z":-3},{"x":-239,"y":539,"z":-1},{"x":-251,"y":545,"z":-1},`
++`{"x":-629,"y":509,"z":9},{"x":-251,"y":575,"z":1},{"x":-257,"y":293,"z":6},{"x":-227,"y":587,"z":0},{"x":-239,"y":743,"z":0},{"x":-257,"y":743,"z":0},{"x":-269,"y":767,"z":0},{"x":-485,"y":893,"z":-29},{"x":-503,"y":875,"z":-22},{"x":-269,"y":893,"z":-24},{"x":-587,"y":1793,"z":-118},{"x":-581,"y":1781,"z":-118},{"x":-551,"y":1811,"z":-120},{"x":-617,"y":1793,"z":-118},{"x":-581,"y":1925,"z":-118},{"x":-617,"y":1919,"z":-117},{"x":-575,"y":1973,"z":-118},{"x":-329,"y":1811,"z":-120},{"x":-329,"y`
++`":1973,"z":-127},{"x":-575,"y":2531,"z":10},{"x":-593,"y":2525,"z":-18},{"x":-581,"y":2519,"z":8},{"x":-527,"y":2489,"z":12},{"x":-515,"y":2489,"z":21},{"x":-527,"y":2507,"z":12},{"x":-557,"y":2549,"z":10},{"x":-575,"y":2549,"z":8},{"x":-533,"y":2471,"z":11},{"x":-521,"y":2543,"z":9},{"x":-581,"y":2471,"z":9},{"x":-305,"y":2585,"z":-91},{"x":-305,"y":2609,"z":-88},{"x":-323,"y":2609,"z":-87},{"x":-323,"y":2567,"z":-93},{"x":-407,"y":2549,"z":-86},{"x":-395,"y":2537,"z":-86},{"x":-371,"y":2537,"z`
++`":-88},{"x":-323,"y":2513,"z":-91},{"x":-305,"y":2525,"z":-93},{"x":-305,"y":2555,"z":-93},{"x":-359,"y":2513,"z":-89},{"x":-335,"y":2627,"z":-81},{"x":-593,"y":2627,"z":-74},{"x":-593,"y":2585,"z":-84},{"x":-575,"y":2561,"z":-86},{"x":-425,"y":1601,"z":-126},{"x":-419,"y":1655,"z":-126},{"x":-503,"y":1661,"z":-122},{"x":-497,"y":1631,"z":-126},{"x":-407,"y":1679,"z":-127},{"x":-365,"y":1655,"z":-128},{"x":-329,"y":1655,"z":-128},{"x":-329,"y":1727,"z":-121},{"x":-263,"y":1733,"z":-101},{"x":-26`
++`3,"y":1775,"z":-103},{"x":-323,"y":1781,"z":-118},{"x":-581,"y":1655,"z":-117},{"x":-107,"y":2219,"z":-128},{"x":-143,"y":2219,"z":-126},{"x":-149,"y":2201,"z":-126},{"x":-149,"y":2063,"z":-125},{"x":-71,"y":2063,"z":-124},{"x":31,"y":2219,"z":-130},{"x":-323,"y":1991,"z":-127},{"x":-263,"y":1991,"z":-126},{"x":-251,"y":2003,"z":-126},{"x":-65,"y":1997,"z":-122},{"x":-29,"y":1991,"z":-123},{"x":13,"y":1997,"z":-123},{"x":-233,"y":2285,"z":-121},{"x":-263,"y":2297,"z":-120},{"x":-317,"y":2297,"z"`
++`:-118},{"x":-413,"y":2195,"z":-125},{"x":-227,"y":2201,"z":-125},{"x":103,"y":2171,"z":-124},{"x":49,"y":2225,"z":-130},{"x":103,"y":2153,"z":-124},{"x":-41,"y":2297,"z":-126},{"x":-101,"y":2297,"z":-128},{"x":-95,"y":2231,"z":-128},{"x":115,"y":2045,"z":-123},{"x":115,"y":2153,"z":-124},{"x":85,"y":2045,"z":-123},{"x":-461,"y":2195,"z":-124},{"x":-155,"y":1997,"z":-125},{"x":-509,"y":887,"z":-25},{"x":-335,"y":1355,"z":-125},{"x":-341,"y":1367,"z":-126},{"x":-365,"y":1373,"z":-126},{"x":-503,"y`
++`":1115,"z":-77},{"x":-533,"y":887,"z":-24},{"x":-533,"y":1109,"z":-72},{"x":-263,"y":1355,"z":-123},{"x":-437,"y":2435,"z":-90},{"x":-443,"y":2447,"z":-88},{"x":-329,"y":2303,"z":-115},{"x":-329,"y":2435,"z":-89},{"x":-503,"y":-619,"z":159},{"x":-503,"y":-637,"z":159},{"x":-341,"y":-637,"z":141},{"x":-341,"y":-619,"z":140},{"x":-377,"y":-301,"z":1},{"x":-365,"y":-295,"z":1},{"x":-365,"y":-271,"z":1},{"x":-377,"y":-265,"z":1},{"x":-377,"y":-199,"z":0},{"x":-395,"y":-193,"z":4},{"x":-461,"y":-211,`
++`"z":0},{"x":-473,"y":-223,"z":0},{"x":-431,"y":-139,"z":-1},{"x":-449,"y":-151,"z":-1},{"x":-5,"y":-607,"z":2},{"x":-11,"y":-493,"z":1},{"x":-65,"y":-487,"z":1},{"x":-503,"y":-223,"z":0},{"x":-503,"y":-607,"z":2},{"x":-377,"y":-391,"z":1},{"x":-71,"y":-457,"z":8},{"x":-311,"y":-457,"z":8},{"x":-497,"y":-139,"z":108},{"x":-479,"y":-151,"z":107},{"x":-467,"y":-139,"z":108},{"x":-455,"y":-79,"z":107},{"x":-479,"y":-73,"z":107},{"x":-497,"y":-97,"z":107},{"x":-455,"y":-67,"z":69},{"x":-449,"y":-79,"`
++`z":69},{"x":-443,"y":-61,"z":69},{"x":-479,"y":-61,"z":69},{"x":-377,"y":2501,"z":-19},{"x":-365,"y":2501,"z":-18},{"x":-377,"y":2513,"z":-28},{"x":-467,"y":2525,"z":1},{"x":-395,"y":2501,"z":-21},{"x":-365,"y":2471,"z":-8},{"x":-377,"y":2471,"z":-13},{"x":-335,"y":2465,"z":3},{"x":-395,"y":2471,"z":-19},{"x":-413,"y":2459,"z":-24},{"x":-329,"y":2447,"z":-2},{"x":-479,"y":2525,"z":1},{"x":-479,"y":2489,"z":1},{"x":-413,"y":2471,"z":-10},{"x":-443,"y":2453,"z":-32},{"x":-455,"y":-139,"z":69},{"x"`
++`:-443,"y":-133,"z":69},{"x":-443,"y":-91,"z":69},{"x":-353,"y":1475,"z":-28},{"x":-353,"y":1379,"z":-29},{"x":-269,"y":1379,"z":-29},{"x":-269,"y":1475,"z":-29},{"x":-311,"y":-613,"z":101},{"x":-329,"y":-619,"z":103},{"x":-329,"y":-637,"z":102},{"x":-191,"y":-637,"z":103},{"x":-191,"y":-619,"z":103},{"x":-311,"y":-1147,"z":75},{"x":151,"y":-1147,"z":0},{"x":151,"y":-1057,"z":0},{"x":133,"y":-787,"z":-11},{"x":157,"y":-1021,"z":1},{"x":169,"y":-1015,"z":1},{"x":169,"y":-787,"z":-10},{"x":1,"y":-6`
++`49,"z":6},{"x":205,"y":449,"z":0},{"x":205,"y":467,"z":1},{"x":169,"y":473,"z":1},{"x":-257,"y":263,"z":6},{"x":-227,"y":263,"z":6},{"x":-221,"y":299,"z":0},{"x":-137,"y":539,"z":0},{"x":-137,"y":569,"z":1},{"x":-173,"y":563,"z":0},{"x":-185,"y":539,"z":0},{"x":187,"y":263,"z":2},{"x":211,"y":287,"z":-1},{"x":217,"y":317,"z":-1},{"x":67,"y":299,"z":0},{"x":139,"y":221,"z":8},{"x":217,"y":443,"z":0},{"x":-71,"y":473,"z":-1},{"x":-233,"y":1529,"z":31},{"x":-257,"y":1529,"z":30},{"x":-257,"y":779,"`
++`z":30},{"x":-233,"y":767,"z":31},{"x":-191,"y":575,"z":44},{"x":-239,"y":575,"z":44},{"x":-239,"y":551,"z":44},{"x":-185,"y":551,"z":44},{"x":-191,"y":587,"z":0},{"x":-137,"y":1271,"z":0},{"x":-221,"y":1529,"z":1},{"x":-221,"y":761,"z":0},{"x":-65,"y":1445,"z":-1},{"x":-137,"y":1523,"z":1},{"x":-65,"y":1337,"z":0},{"x":-179,"y":-619,"z":62},{"x":-179,"y":-637,"z":62},{"x":1,"y":-637,"z":62},{"x":1,"y":-619,"z":62},{"x":223,"y":1337,"z":0},{"x":277,"y":1337,"z":0},{"x":283,"y":1355,"z":0},{"x":29`
++`5,"y":1457,"z":0},{"x":295,"y":1487,"z":1},{"x":253,"y":1529,"z":2},{"x":307,"y":1355,"z":0},{"x":307,"y":1457,"z":0},{"x":-119,"y":1535,"z":1},{"x":-119,"y":1589,"z":2},{"x":61,"y":1529,"z":0},{"x":61,"y":1589,"z":1},{"x":217,"y":1325,"z":1},{"x":-113,"y":2291,"z":-55},{"x":-125,"y":2291,"z":-55},{"x":-125,"y":2237,"z":-54},{"x":-107,"y":2237,"z":-54},{"x":-17,"y":2309,"z":-31},{"x":-17,"y":2285,"z":-31},{"x":37,"y":2231,"z":-31},{"x":103,"y":2285,"z":-31},{"x":109,"y":2303,"z":-31},{"x":43,"y"`
++`:2369,"z":-31},{"x":127,"y":-175,"z":9},{"x":127,"y":-199,"z":9},{"x":139,"y":-205,"z":9},{"x":205,"y":-169,"z":8},{"x":349,"y":-595,"z":0},{"x":373,"y":-595,"z":1},{"x":373,"y":-553,"z":1},{"x":337,"y":-613,"z":2},{"x":385,"y":-439,"z":1},{"x":373,"y":-433,"z":0},{"x":325,"y":-313,"z":1},{"x":325,"y":-253,"z":-1},{"x":283,"y":-253,"z":0},{"x":373,"y":-379,"z":3},{"x":385,"y":-373,"z":8},{"x":385,"y":-547,"z":1},{"x":139,"y":-259,"z":8},{"x":13,"y":-619,"z":4},{"x":43,"y":-487,"z":2},{"x":109,"y`
++`":-265,"z":2},{"x":103,"y":-427,"z":2},{"x":13,"y":-643,"z":5},{"x":361,"y":-655,"z":3},{"x":337,"y":-637,"z":3},{"x":445,"y":-1009,"z":6},{"x":445,"y":-649,"z":2},{"x":121,"y":2291,"z":-126},{"x":505,"y":2057,"z":-124},{"x":535,"y":2063,"z":-120},{"x":535,"y":2285,"z":-112},{"x":499,"y":2045,"z":-124},{"x":505,"y":2291,"z":-125},{"x":499,"y":2321,"z":-119},{"x":115,"y":2321,"z":-117},{"x":391,"y":2543,"z":-117},{"x":385,"y":2555,"z":-116},{"x":205,"y":2555,"z":-117},{"x":199,"y":2543,"z":-118},`
++`{"x":73,"y":2549,"z":-117},{"x":79,"y":2357,"z":-115},{"x":499,"y":2549,"z":-106},{"x":571,"y":269,"z":1},{"x":547,"y":263,"z":6},{"x":541,"y":245,"z":6},{"x":661,"y":245,"z":0},{"x":637,"y":257,"z":0},{"x":139,"y":137,"z":8},{"x":127,"y":131,"z":9},{"x":127,"y":95,"z":9},{"x":169,"y":77,"z":8},{"x":619,"y":311,"z":1},{"x":577,"y":293,"z":1},{"x":739,"y":245,"z":8},{"x":733,"y":263,"z":6},{"x":679,"y":263,"z":0},{"x":643,"y":53,"z":-1},{"x":679,"y":53,"z":0},{"x":169,"y":59,"z":8},{"x":139,"y":4`
++`7,"z":8},{"x":139,"y":-1,"z":8},{"x":193,"y":11,"z":7},{"x":721,"y":323,"z":1},{"x":643,"y":335,"z":1},{"x":217,"y":-49,"z":4},{"x":703,"y":-1,"z":0},{"x":733,"y":-133,"z":1},{"x":763,"y":-127,"z":8},{"x":757,"y":245,"z":8},{"x":463,"y":245,"z":-1},{"x":457,"y":263,"z":1},{"x":607,"y":-43,"z":-2},{"x":595,"y":29,"z":-3},{"x":157,"y":77,"z":53},{"x":145,"y":83,"z":53},{"x":133,"y":77,"z":53},{"x":133,"y":59,"z":53},{"x":157,"y":59,"z":53},{"x":139,"y":-103,"z":44},{"x":139,"y":-163,"z":44},{"x":2`
++`05,"y":-157,"z":44},{"x":199,"y":-91,"z":44},{"x":139,"y":-19,"z":79},{"x":139,"y":-67,"z":79},{"x":145,"y":-91,"z":79},{"x":211,"y":-67,"z":79},{"x":193,"y":-7,"z":79},{"x":163,"y":-1147,"z":40},{"x":175,"y":-1135,"z":40},{"x":175,"y":-1027,"z":40},{"x":241,"y":443,"z":0},{"x":253,"y":473,"z":0},{"x":457,"y":305,"z":2},{"x":469,"y":311,"z":6},{"x":469,"y":473,"z":2},{"x":595,"y":-271,"z":-1},{"x":607,"y":-271,"z":-1},{"x":607,"y":-229,"z":-2},{"x":553,"y":-373,"z":8},{"x":559,"y":-385,"z":8},{"`
++`x":595,"y":-355,"z":7},{"x":661,"y":-175,"z":-2},{"x":643,"y":-163,"z":-2},{"x":469,"y":-373,"z":8},{"x":475,"y":-385,"z":9},{"x":217,"y":-163,"z":8},{"x":217,"y":473,"z":45},{"x":217,"y":455,"z":45},{"x":241,"y":455,"z":45},{"x":241,"y":473,"z":45},{"x":409,"y":1763,"z":100},{"x":421,"y":1769,"z":102},{"x":385,"y":1811,"z":95},{"x":265,"y":1535,"z":2},{"x":373,"y":1649,"z":10},{"x":409,"y":1649,"z":23},{"x":259,"y":1811,"z":96},{"x":421,"y":1355,"z":0},{"x":421,"y":1433,"z":0},{"x":505,"y":1757`
++`,"z":5},{"x":421,"y":1757,"z":4},{"x":421,"y":1643,"z":3},{"x":505,"y":1439,"z":0},{"x":379,"y":1637,"z":3},{"x":421,"y":2039,"z":96},{"x":433,"y":2045,"z":96},{"x":409,"y":2075,"z":96},{"x":289,"y":1895,"z":98},{"x":259,"y":1895,"z":98},{"x":301,"y":1907,"z":98},{"x":421,"y":1961,"z":96},{"x":301,"y":2075,"z":97},{"x":505,"y":1769,"z":102},{"x":505,"y":1955,"z":96},{"x":511,"y":2429,"z":96},{"x":523,"y":2435,"z":96},{"x":511,"y":2453,"z":96},{"x":511,"y":2051,"z":96},{"x":295,"y":2105,"z":98},{`
++`"x":265,"y":2453,"z":98},{"x":265,"y":2105,"z":98},{"x":547,"y":2627,"z":95},{"x":553,"y":2615,"z":95},{"x":583,"y":2639,"z":95},{"x":523,"y":2549,"z":96},{"x":523,"y":2573,"z":96},{"x":499,"y":2591,"z":96},{"x":595,"y":2489,"z":96},{"x":559,"y":2531,"z":96},{"x":541,"y":2531,"z":96},{"x":595,"y":2435,"z":97},{"x":571,"y":2711,"z":97},{"x":511,"y":2627,"z":95},{"x":583,"y":2705,"z":97},{"x":295,"y":2537,"z":98},{"x":265,"y":2531,"z":98},{"x":499,"y":2615,"z":96},{"x":571,"y":2777,"z":97},{"x":40`
++`9,"y":2723,"z":97},{"x":391,"y":2705,"z":104},{"x":403,"y":2777,"z":98},{"x":295,"y":2687,"z":97},{"x":367,"y":2777,"z":138},{"x":343,"y":2777,"z":138},{"x":337,"y":2765,"z":138},{"x":373,"y":2747,"z":138},{"x":397,"y":2723,"z":138},{"x":397,"y":2747,"z":138},{"x":367,"y":2723,"z":138},{"x":295,"y":2729,"z":138},{"x":301,"y":2699,"z":138},{"x":319,"y":2711,"z":138},{"x":307,"y":2747,"z":138},{"x":349,"y":2705,"z":131},{"x":271,"y":2777,"z":138},{"x":265,"y":2753,"z":138},{"x":373,"y":-607,"z":49`
++`},{"x":349,"y":-607,"z":49},{"x":349,"y":-631,"z":49},{"x":367,"y":-643,"z":49},{"x":433,"y":1421,"z":74},{"x":433,"y":1355,"z":74},{"x":499,"y":1355,"z":74},{"x":499,"y":1427,"z":74},{"x":433,"y":2033,"z":132},{"x":433,"y":1967,"z":132},{"x":499,"y":1967,"z":132},{"x":499,"y":2033,"z":132},{"x":637,"y":797,"z":0},{"x":643,"y":785,"z":1},{"x":679,"y":815,"z":0},{"x":541,"y":791,"z":6},{"x":547,"y":773,"z":6},{"x":589,"y":773,"z":1},{"x":619,"y":797,"z":1},{"x":505,"y":791,"z":2},{"x":703,"y":110`
++`9,"z":1},{"x":703,"y":1205,"z":3},{"x":655,"y":1205,"z":2},{"x":523,"y":1169,"z":3},{"x":523,"y":1037,"z":2},{"x":679,"y":935,"z":0},{"x":505,"y":1031,"z":1},{"x":721,"y":935,"z":0},{"x":727,"y":1079,"z":0},{"x":511,"y":2615,"z":131},{"x":511,"y":2597,"z":131},{"x":517,"y":2585,"z":131},{"x":541,"y":2585,"z":131},{"x":541,"y":2615,"z":131},{"x":745,"y":323,"z":0},{"x":757,"y":335,"z":0},{"x":685,"y":743,"z":1},{"x":673,"y":773,"z":1},{"x":637,"y":773,"z":1},{"x":577,"y":743,"z":1},{"x":565,"y":7`
++`13,"z":1},{"x":637,"y":713,"z":1},{"x":523,"y":335,"z":2},{"x":535,"y":323,"z":2},{"x":583,"y":323,"z":1},{"x":625,"y":353,"z":1},{"x":691,"y":575,"z":1},{"x":685,"y":605,"z":1},{"x":643,"y":611,"z":1},{"x":523,"y":707,"z":1},{"x":757,"y":575,"z":0},{"x":793,"y":2423,"z":126},{"x":787,"y":2459,"z":138},{"x":727,"y":2459,"z":138},{"x":715,"y":2423,"z":126},{"x":1285,"y":2729,"z":124},{"x":1255,"y":2735,"z":125},{"x":1261,"y":2477,"z":127},{"x":523,"y":2057,"z":126},{"x":541,"y":2057,"z":126},{"x"`
++`:547,"y":2399,"z":125},{"x":523,"y":2423,"z":126},{"x":1021,"y":2399,"z":125},{"x":1045,"y":2423,"z":125},{"x":1249,"y":2327,"z":126},{"x":1279,"y":2303,"z":125},{"x":1051,"y":2327,"z":126},{"x":1027,"y":2303,"z":125},{"x":811,"y":2057,"z":-48},{"x":811,"y":2201,"z":-43},{"x":787,"y":2201,"z":-50},{"x":709,"y":2285,"z":-62},{"x":535,"y":2555,"z":138},{"x":541,"y":2543,"z":138},{"x":559,"y":2543,"z":138},{"x":565,"y":2573,"z":138},{"x":541,"y":2573,"z":138},{"x":625,"y":2363,"z":65},{"x":619,"y":`
++`2387,"z":65},{"x":553,"y":2387,"z":65},{"x":553,"y":2351,"z":65},{"x":559,"y":2585,"z":96},{"x":571,"y":2585,"z":96},{"x":793,"y":2471,"z":96},{"x":799,"y":2459,"z":96},{"x":829,"y":2483,"z":95},{"x":583,"y":2567,"z":96},{"x":577,"y":2543,"z":96},{"x":811,"y":2717,"z":96},{"x":835,"y":2735,"z":96},{"x":835,"y":2777,"z":101},{"x":745,"y":2777,"z":99},{"x":721,"y":2471,"z":96},{"x":811,"y":2705,"z":96},{"x":739,"y":2699,"z":96},{"x":835,"y":2687,"z":96},{"x":709,"y":2435,"z":97},{"x":709,"y":2459,`
++`"z":97},{"x":559,"y":-403,"z":8},{"x":583,"y":-403,"z":8},{"x":739,"y":-331,"z":8},{"x":739,"y":-355,"z":8},{"x":769,"y":-355,"z":8},{"x":721,"y":-391,"z":8},{"x":721,"y":-355,"z":7},{"x":709,"y":-349,"z":7},{"x":721,"y":-163,"z":1},{"x":589,"y":-415,"z":8},{"x":697,"y":-415,"z":8},{"x":715,"y":-325,"z":7},{"x":559,"y":2321,"z":-29},{"x":559,"y":2297,"z":-29},{"x":631,"y":2297,"z":-12},{"x":631,"y":2321,"z":-12},{"x":559,"y":2345,"z":28},{"x":559,"y":2333,"z":28},{"x":589,"y":2333,"z":28},{"x":5`
++`89,"y":2345,"z":28},{"x":631,"y":-43,"z":59},{"x":625,"y":-61,"z":45},{"x":637,"y":-61,"z":59},{"x":703,"y":-91,"z":58},{"x":709,"y":-73,"z":44},{"x":697,"y":-73,"z":59},{"x":631,"y":-85,"z":45},{"x":643,"y":-85,"z":59},{"x":637,"y":-109,"z":43},{"x":649,"y":-109,"z":58},{"x":721,"y":-127,"z":37},{"x":715,"y":-97,"z":44},{"x":679,"y":-163,"z":35},{"x":721,"y":-151,"z":35},{"x":643,"y":-127,"z":44},{"x":655,"y":-163,"z":35},{"x":607,"y":23,"z":34},{"x":619,"y":-43,"z":42},{"x":673,"y":41,"z":34},`
++`{"x":697,"y":-25,"z":42},{"x":607,"y":2351,"z":28},{"x":607,"y":2333,"z":28},{"x":631,"y":2333,"z":28},{"x":631,"y":2351,"z":28},{"x":715,"y":773,"z":5},{"x":733,"y":773,"z":6},{"x":739,"y":791,"z":6},{"x":841,"y":827,"z":0},{"x":853,"y":809,"z":0},{"x":877,"y":827,"z":0},{"x":703,"y":749,"z":0},{"x":805,"y":791,"z":0},{"x":811,"y":827,"z":0},{"x":877,"y":1079,"z":1},{"x":643,"y":2321,"z":-43},{"x":643,"y":2297,"z":-43},{"x":709,"y":2297,"z":-28},{"x":709,"y":2321,"z":-28},{"x":709,"y":2333,"z":`
++`5},{"x":715,"y":2363,"z":23},{"x":703,"y":2363,"z":5},{"x":643,"y":2333,"z":-1},{"x":703,"y":2393,"z":5},{"x":643,"y":2393,"z":-1},{"x":985,"y":2255,"z":9},{"x":1027,"y":2297,"z":20},{"x":1015,"y":2303,"z":21},{"x":901,"y":2057,"z":-29},{"x":907,"y":2027,"z":-21},{"x":955,"y":2027,"z":-11},{"x":955,"y":2177,"z":-7},{"x":751,"y":2351,"z":-46},{"x":721,"y":2351,"z":-53},{"x":721,"y":2291,"z":-58},{"x":763,"y":2363,"z":-42},{"x":985,"y":2177,"z":-2},{"x":1015,"y":2393,"z":24},{"x":763,"y":2393,"z":`
++`-39},{"x":715,"y":2393,"z":23},{"x":745,"y":2363,"z":26},{"x":745,"y":2393,"z":26},{"x":745,"y":1103,"z":119},{"x":739,"y":1139,"z":118},{"x":727,"y":1139,"z":118},{"x":727,"y":1091,"z":123},{"x":889,"y":1205,"z":116},{"x":829,"y":1205,"z":120},{"x":829,"y":1181,"z":124},{"x":829,"y":1175,"z":124},{"x":799,"y":1103,"z":132},{"x":889,"y":1091,"z":123},{"x":751,"y":1181,"z":145},{"x":817,"y":1175,"z":139},{"x":817,"y":1157,"z":140},{"x":751,"y":1115,"z":150},{"x":799,"y":1115,"z":145},{"x":817,"y"`
++`:1151,"z":141},{"x":829,"y":1157,"z":131},{"x":829,"y":1151,"z":132},{"x":829,"y":1109,"z":121},{"x":817,"y":1109,"z":144},{"x":805,"y":2435,"z":97},{"x":997,"y":2435,"z":96},{"x":997,"y":2525,"z":96},{"x":1039,"y":2687,"z":95},{"x":1039,"y":2759,"z":97},{"x":1021,"y":2777,"z":100},{"x":883,"y":2777,"z":102},{"x":901,"y":2687,"z":96},{"x":1009,"y":2573,"z":96},{"x":1063,"y":2573,"z":96},{"x":1063,"y":2687,"z":95},{"x":817,"y":815,"z":46},{"x":817,"y":791,"z":46},{"x":835,"y":791,"z":46},{"x":841`
++`,"y":815,"z":46},{"x":841,"y":2729,"z":121},{"x":823,"y":2711,"z":122},{"x":841,"y":2699,"z":122},{"x":889,"y":2693,"z":142},{"x":889,"y":2717,"z":142},{"x":871,"y":2723,"z":142},{"x":865,"y":2717,"z":142},{"x":865,"y":2693,"z":141},{"x":847,"y":2735,"z":142},{"x":871,"y":2777,"z":141},{"x":853,"y":2777,"z":142},{"x":1207,"y":1205,"z":0},{"x":1201,"y":1217,"z":1},{"x":1171,"y":1217,"z":1},{"x":1165,"y":1205,"z":0},{"x":853,"y":779,"z":1},{"x":901,"y":779,"z":8},{"x":991,"y":1217,"z":1},{"x":979,`
++`"y":1205,"z":0},{"x":979,"y":1139,"z":1},{"x":1105,"y":1205,"z":0},{"x":1099,"y":1217,"z":1},{"x":907,"y":1133,"z":1},{"x":901,"y":1085,"z":1},{"x":967,"y":707,"z":8},{"x":985,"y":725,"z":7},{"x":1243,"y":1205,"z":0},{"x":1237,"y":725,"z":8},{"x":1237,"y":773,"z":8},{"x":1255,"y":791,"z":0},{"x":967,"y":1145,"z":36},{"x":967,"y":1205,"z":36},{"x":907,"y":1205,"z":36},{"x":901,"y":1145,"z":36},{"x":967,"y":605,"z":14},{"x":955,"y":599,"z":10},{"x":955,"y":203,"z":12},{"x":1237,"y":203,"z":11},{"x`
++`":1249,"y":2027,"z":2},{"x":1255,"y":2015,"z":2},{"x":1273,"y":2033,"z":1},{"x":1273,"y":2297,"z":14},{"x":1009,"y":2495,"z":168},{"x":1009,"y":2435,"z":168},{"x":1069,"y":2435,"z":169},{"x":1069,"y":2495,"z":168},{"x":1069,"y":2507,"z":152},{"x":1081,"y":2555,"z":152},{"x":1051,"y":2567,"z":152},{"x":1021,"y":2567,"z":152},{"x":1009,"y":2519,"z":152},{"x":1021,"y":2507,"z":152},{"x":1243,"y":2789,"z":116},{"x":1255,"y":2789,"z":125},{"x":1255,"y":2813,"z":125},{"x":1033,"y":2783,"z":108},{"x":1`
++`291,"y":2819,"z":123},{"x":1279,"y":2825,"z":125},{"x":1279,"y":2855,"z":126},{"x":1297,"y":2867,"z":127},{"x":1279,"y":2891,"z":128},{"x":1081,"y":2429,"z":96},{"x":1057,"y":2423,"z":97},{"x":1057,"y":2339,"z":99},{"x":1033,"y":2897,"z":128},{"x":1093,"y":2543,"z":96},{"x":1081,"y":2519,"z":96},{"x":1177,"y":2477,"z":96},{"x":1177,"y":2543,"z":96},{"x":1087,"y":2567,"z":96},{"x":1189,"y":2555,"z":96},{"x":1243,"y":2339,"z":100},{"x":1243,"y":2471,"z":97},{"x":1243,"y":2555,"z":99},{"x":1573,"y"`
++`:2975,"z":128},{"x":1597,"y":2981,"z":133},{"x":1597,"y":3011,"z":133},{"x":1573,"y":3017,"z":127},{"x":1039,"y":3017,"z":130},{"x":1027,"y":3011,"z":129},{"x":1027,"y":2951,"z":129},{"x":1039,"y":2945,"z":129},{"x":1357,"y":2867,"z":117},{"x":1369,"y":2849,"z":116},{"x":1573,"y":2855,"z":124},{"x":1573,"y":3071,"z":127},{"x":1039,"y":3071,"z":131},{"x":1189,"y":2543,"z":170},{"x":1189,"y":2483,"z":170},{"x":1249,"y":2483,"z":171},{"x":1249,"y":2543,"z":170},{"x":1243,"y":1631,"z":1},{"x":1225,"`
++`y":1625,"z":1},{"x":1225,"y":1595,"z":2},{"x":1243,"y":1589,"z":1},{"x":1243,"y":1547,"z":0},{"x":1255,"y":1535,"z":2},{"x":1603,"y":1535,"z":0},{"x":1609,"y":1673,"z":0},{"x":1243,"y":1673,"z":0},{"x":1621,"y":1697,"z":0},{"x":1639,"y":1697,"z":1},{"x":1657,"y":1733,"z":1},{"x":1657,"y":1775,"z":0},{"x":1681,"y":1799,"z":0},{"x":1651,"y":1835,"z":0},{"x":1231,"y":1763,"z":1},{"x":1231,"y":1685,"z":1},{"x":1255,"y":1787,"z":3},{"x":1255,"y":1841,"z":1},{"x":1273,"y":1253,"z":0},{"x":1261,"y":124`
++`1,"z":0},{"x":1255,"y":1211,"z":0},{"x":1585,"y":1259,"z":1},{"x":1501,"y":923,"z":-9},{"x":1603,"y":1031,"z":1},{"x":1591,"y":1037,"z":1},{"x":1591,"y":1061,"z":1},{"x":1603,"y":1067,"z":1},{"x":1603,"y":1235,"z":1},{"x":1273,"y":779,"z":-5},{"x":1411,"y":917,"z":-9},{"x":1249,"y":761,"z":31},{"x":1249,"y":329,"z":30},{"x":1273,"y":329,"z":30},{"x":1273,"y":767,"z":30},{"x":1249,"y":1253,"z":0},{"x":1249,"y":1361,"z":1},{"x":1597,"y":1289,"z":1},{"x":1591,"y":1379,"z":1},{"x":1261,"y":1373,"z":`
++`0},{"x":1591,"y":1409,"z":1},{"x":1609,"y":1433,"z":1},{"x":1801,"y":1979,"z":4},{"x":1759,"y":1973,"z":3},{"x":1753,"y":1931,"z":2},{"x":1801,"y":1799,"z":2},{"x":1681,"y":1919,"z":1},{"x":1297,"y":2057,"z":0},{"x":1633,"y":2057,"z":0},{"x":1357,"y":2819,"z":114},{"x":1291,"y":2645,"z":96},{"x":1615,"y":2639,"z":86},{"x":1621,"y":2759,"z":111},{"x":1573,"y":2765,"z":113},{"x":1723,"y":989,"z":1},{"x":1717,"y":1025,"z":1},{"x":1585,"y":779,"z":-9},{"x":1621,"y":779,"z":-5},{"x":1627,"y":767,"z":`
++`1},{"x":1783,"y":773,"z":1},{"x":1783,"y":989,"z":1},{"x":1285,"y":761,"z":-10},{"x":1579,"y":761,"z":-11},{"x":1321,"y":2357,"z":23},{"x":1291,"y":2351,"z":23},{"x":1291,"y":2303,"z":15},{"x":1705,"y":2147,"z":2},{"x":1783,"y":2279,"z":4},{"x":1621,"y":2123,"z":0},{"x":1627,"y":2279,"z":0},{"x":1621,"y":2435,"z":34},{"x":1651,"y":2141,"z":1},{"x":1321,"y":2429,"z":39},{"x":1279,"y":191,"z":-183},{"x":1315,"y":179,"z":-187},{"x":1531,"y":179,"z":-187},{"x":1585,"y":191,"z":-180},{"x":1291,"y":24`
++`23,"z":88},{"x":1291,"y":2363,"z":76},{"x":1309,"y":2363,"z":76},{"x":1309,"y":2423,"z":88},{"x":1291,"y":2435,"z":50},{"x":1315,"y":2441,"z":49},{"x":1309,"y":2855,"z":166},{"x":1291,"y":2855,"z":166},{"x":1291,"y":2837,"z":166},{"x":1309,"y":2825,"z":167},{"x":1333,"y":2855,"z":160},{"x":1333,"y":2831,"z":160},{"x":1357,"y":2831,"z":160},{"x":1357,"y":2855,"z":160},{"x":1591,"y":707,"z":77},{"x":1591,"y":329,"z":77},{"x":1615,"y":329,"z":77},{"x":1615,"y":707,"z":78},{"x":1591,"y":767,"z":54},`
++`{"x":1591,"y":719,"z":54},{"x":1615,"y":719,"z":54},{"x":1615,"y":767,"z":54},{"x":1627,"y":299,"z":58},{"x":1783,"y":299,"z":58},{"x":1657,"y":2051,"z":58},{"x":1651,"y":2033,"z":44},{"x":1663,"y":2033,"z":59},{"x":1729,"y":2003,"z":59},{"x":1735,"y":2021,"z":47},{"x":1723,"y":2021,"z":59},{"x":1669,"y":2015,"z":59},{"x":1663,"y":1997,"z":50},{"x":1675,"y":1991,"z":59},{"x":1729,"y":1937,"z":36},{"x":1747,"y":1943,"z":36},{"x":1747,"y":1979,"z":38},{"x":1633,"y":2117,"z":34},{"x":1645,"y":2051,`
++`"z":41},{"x":1699,"y":2135,"z":34},{"x":1681,"y":1937,"z":36},{"x":1723,"y":2069,"z":44},{"x":1783,"y":1001,"z":64},{"x":1783,"y":1019,"z":64},{"x":1735,"y":1025,"z":64},{"x":1729,"y":1001,"z":64}],"polys":[[0,1,2,3],[4,5,6],[7,4,6,8,9,10],[11,12,13,14],[15,16,17],[11,14,9,8,18,3],[18,15,17],[0,3,18,17,19,20],[21,22,23,24,25],[26,27,28],[17,16,21],[28,19,17],[29,30,26],[26,28,17,21,25,29],[31,32,33],[33,34,35],[36,37,31,38],[33,35,39],[40,38,31],[41,42,40,31,33,39],[39,43,41],[44,45,46],[47,48,4`
++`9,50],[51,52,53,54],[55,56,57],[55,57,54],[58,55,54,53,59],[60,47,50],[50,61,44,46,62,63],[59,64,65,60],[63,58,59,60,50],[66,67,68,69],[69,70,71,66],[68,61,50,49,72,69],[73,74,75,76],[77,78,79,76],[80,73,76,79,81],[82,83,84],[85,86,82],[87,88,89],[90,91,92,93,94,87],[85,82,84,95],[56,55,93,92],[95,84,94,93],[96,97,90,87,89],[89,88,98],[98,86,85],[89,98,85,99,100],[101,102,103],[104,101,103,105],[106,107,108],[109,110,111],[112,106,108,113],[85,114,99],[115,116,117],[118,119,109,111,120,121],[115`
++`,117,122,123],[89,100,112],[124,125,96],[126,124,96,89,112,113],[120,111,115,123],[122,104,105,127,128],[113,123,122,128,126],[129,130,131,132],[133,134,135,136,137,138],[133,138,139,30,29],[140,141,142,143],[144,145,146],[135,134,144,146,147,148],[149,150,151],[152,153,140,143,149],[151,154,155],[152,149,151,155,148,147],[156,157,158,159],[160,161,162,163],[164,165,166,167],[168,169,170,171,172],[173,164,167,163,162,174],[175,176,177],[178,179,180],[181,182,183,184,185],[168,172,175,177,181,185`
++`],[171,170,186,187,188,189],[180,190,191],[180,191,189,188,178],[189,163,167,171],[32,31,37,192,193,194],[166,165,195,196],[197,198,199,200],[201,202,197,200,194],[198,203,204],[205,33,32],[206,207,208,209],[210,211,199],[194,212,213,205,32],[208,196,195,209],[37,36,206],[199,198,204],[214,173,174],[214,174,215,210,199,204],[37,206,209,214,204,192],[215,216,210],[193,201,194],[136,135,148],[155,137,136,148],[70,213,212,71],[217,218,219,220,221],[222,223,224,225],[226,227,228,229],[230,231,232,23`
++`3,234],[235,8,6],[6,5,236],[22,235,6,23],[237,24,23,238,239],[236,240,241],[23,6,236,241,242,238],[243,244,245,246],[247,248,249,250],[251,252,247,250],[253,254,255,256],[257,258,259,260,261],[262,263,264,265],[266,267,268],[269,266,268,270],[271,269,270,272],[273,274,275,276,267,266],[277,267,276],[278,279,280,281],[272,270,277,282],[281,280,272],[276,283,284,282,277],[282,285,286,281,272],[287,288,289],[290,291,292],[293,294,295,296,297],[298,299,300,292],[287,289,301,290,292,302],[295,303,304`
++`,146,296],[305,306,307,292],[308,152,147],[186,308,147,309,187],[301,310,290],[307,311,309],[300,302,292],[146,304,298],[292,307,309,147,146,298],[312,313,314,315],[316,317,318],[319,320,321,322,323],[324,325,326,327,328],[316,318,329,327,326,330],[331,332,333],[334,46,45,335,336,337],[338,339,340,328],[341,342,343,344],[344,345,346],[347,348,349],[350,351,352,353],[347,349,354],[355,348,347,324],[323,322,356,336],[353,341,344],[357,358,359,350],[336,356,360],[336,360,331,361],[353,344,346,340,3`
++`57,350],[333,347,354,361,331],[336,361,337],[46,334,362],[46,362,363],[324,328,340],[363,355,324],[62,46,363,324,340,346],[239,238,242],[364,365,366,367],[368,369,370,371,372],[373,374,375,376],[367,377,378],[379,373,376,380],[381,382,383],[384,385,386,387],[388,381,383,389,390,391],[392,371,370],[393,394,395],[391,396,397,388],[383,384,387,398,399,389],[400,393,395,401,402],[376,403,380],[401,404,402],[405,406,389,399],[407,408,409,410],[407,410,379],[378,407,379,380],[411,237,239],[395,412,401`
++`],[398,387,364,367],[398,367,378],[370,400,402],[380,413,411,239],[370,402,414,242,241,392],[414,398,378,380,239,242],[343,342,415],[416,417,418,419,420,421],[422,352,351,423],[424,425,416],[423,424,416,421,426],[427,420,419,428],[415,422,423],[423,426,429,343,415],[430,427,428],[429,430,428,343],[431,432,433,434],[435,436,437,438,439,440],[441,442,431,443,444],[431,434,445,443],[440,443,445],[440,445,435],[446,447,448,449],[450,451,452,453],[454,450,453,455],[456,457,454,455,458],[458,455,446],`
++`[459,458,446,449],[460,461,462],[463,460,462,464,465,466],[467,468,469,470,471,472],[473,474,475,476],[477,478,479],[480,477,479,481,482,483],[484,485,486,487],[488,489,490,491],[492,493,494,495],[496,497,492,495],[498,499,500,501,502],[503,504,505],[506,507,508,509],[510,511,512,513],[501,514,515,502],[500,516,517,501],[518,502,515,503,519],[513,520,521,522,523],[509,508,524,525,526,527],[528,529,216,505],[521,530,509,531,522],[532,533,519],[518,519,510,513,523],[215,532,519,503,505,216],[509,5`
++`27,531],[534,535,536],[537,538,534,536],[539,540,541,542,543],[544,545,546,547],[548,549,539,543,550,551],[547,546,552,553,554],[550,543,555],[554,550,555,547],[556,557,558,559,560,561],[562,563,564],[565,566,567],[568,569,562,564,565,570],[560,571,561],[565,567,572,570],[569,568,559,558],[573,574,575,576],[577,578,579,580],[581,582,583,584],[585,586,587,588],[589,590,588,587,591],[591,592,593,594,589],[595,596,597,598],[599,600,601,602],[603,604,605,606],[607,608,609,610],[611,612,613,614],[615`
++`,616,617,618],[619,620,621,622],[623,624,625,626,627],[628,629,630,631],[632,633,634,635],[636,625,624,637,638,639],[318,317,640],[638,641,639],[636,639,631],[642,636,631,630,643],[644,645,646,647],[648,649,650,651,652],[653,329,318],[654,655,632],[647,656,657],[658,653,318,640,647,657],[635,627,626,642,643,632],[659,660,661,648,654,632],[662,663,644,647,640],[632,643,659],[661,664,648],[665,666,667],[657,665,667],[668,669,651,650],[657,667,654,648,652,658],[670,671,672,673],[674,675,676,677],[6`
++`78,679,680,681],[682,683,684,685,686],[687,688,689,690,691],[692,693,694,695],[695,694,696,697],[693,692,698],[699,693,698],[696,699,698,700,697],[701,702,703,704],[705,706,707,708],[709,710,711,712],[713,714,715,716,717],[718,719,720],[721,524,508],[721,508,507,722],[723,724,725],[506,726,723,507],[725,718,720,727,728],[729,730,727,720],[728,731,722,507,723,725],[634,633,655],[732,627,635,634,655,654],[666,733,734,667],[735,736,737,738],[734,739,735,667],[738,740,741],[732,654,667,735,738,741],`
++`[742,743,744,745,746,747],[394,369,368],[368,372,748],[394,368,748],[749,750,412,395],[395,394,748,751,752,749],[753,754,755],[756,757,758,759],[760,761,762,763],[764,750,749],[763,762,765,749,752,766],[758,767,759],[766,768,769,763],[770,764,749],[765,756,759,771,770,749],[772,773,774,775],[776,777,778,624,623],[779,780,781],[782,732,741,783,784],[776,623,782,785,786],[740,779,781,783,741],[784,785,782],[787,788,789],[790,791,792,793,794,795],[792,796,797],[795,798,790],[799,787,789,800,801],[8`
++`02,803,794,793],[720,719,804,805,799,801],[792,797,800,789,806,793],[801,807,729,720],[808,809,810,811],[812,813,814],[815,816,817,818,819],[811,810,820,821,822,823],[824,825,812],[824,812,814,820],[814,826,819],[818,827,828],[821,820,814,819,818,828],[819,829,815],[830,831,832,833,834,835],[836,837,838,839],[840,835,834,836],[836,839,840],[841,842,843,844],[845,846,847,848],[849,850,851],[852,853,854,855],[856,822,821],[847,856,821,851,848],[852,855,857,828,827],[827,858,852],[859,860,861],[857`
++`,859,861,862],[863,864,849,862,865],[851,821,828,857,862,849],[866,867,868],[869,866,868,870,871],[872,870,868,873,874],[875,876,877],[878,879,880],[881,882,875],[883,878,880],[881,875,877],[880,884,881,877,885,883],[886,887,888,889],[890,891,892,889],[893,894,895,889,892,896],[889,888,897],[898,899,900,890,889,897],[901,791,790],[901,790,798,902,903,904],[905,906,907,908,873],[909,910,911,908],[908,911,873],[903,902,905],[868,867,912,903,905,873],[913,914,915,916,917,918],[919,920,921],[922,923`
++`,924],[925,926,927,928,929],[930,931,918,932],[933,934,935,918],[936,937,932,938],[917,922,924,938,932,918],[928,939,781],[921,940,916],[918,935,913],[781,780,872,874,919,928],[919,921,916,915,929,928],[941,864,863],[942,943,944,789,788,945],[946,941,863,945,947],[944,806,789],[865,948,942,945,863],[949,950,783],[928,927,951],[939,928,951,949,783],[951,952,949],[781,939,783],[953,954,955,956],[957,958,959,960],[960,961,962,963,964,957],[965,966,963,962],[817,816,965,962],[967,968,969],[957,964,9`
++`70,971,972],[969,973,974],[967,969,974,971],[974,972,971],[975,976,977,978,979,980],[981,982,983],[983,984,981],[985,986,987,988,989],[990,986,985,991],[992,990,991,993,994,995],[989,988,996,997,998,993],[993,998,994],[994,999,995],[1000,1001,1002],[1003,1004,1005,1006],[1007,1008,1009,1010,1011],[759,767,1012,1013,1014,1015],[1016,1017,1018],[1016,1018,1015,1014],[1015,1019,771,759],[1020,1021,1022],[858,1023,1024,1025,853,852],[1026,1027,1028,1029],[1030,1031,1032,1033,1034],[1032,1035,1020],[`
++`1036,1026,1029,854,853],[1032,1020,1022],[1033,1032,1022,1036,853,1025],[1037,1038,1039,1040],[1041,1042,1043,1044],[1045,1028,1027,1046,1047,1048],[860,859,1045,1048],[1049,1050,1047,1046,1051],[1052,1053,1054,1055],[1056,1057,1058,1059,1060,1061],[1062,1063,1059,1058],[1064,1050,1049],[1065,1064,1049,1066,1067],[1068,1056,1061,1066,1049,1051],[1069,1070,1071,1072],[1073,1074,1075,1076,1077,1078],[1079,1080,1081,1082],[1083,1084,1085],[1086,1083,1085,1087,1088],[1089,1090,1091],[1092,1093,1089]`
++`,[1085,1094,1087],[1082,1081,1095,1091],[968,967,1096,1097],[1088,1092,1089],[1095,1098,1099,1091],[1088,1089,1091],[1099,1097,1096,1086,1088,1091],[1100,1019,1015],[1096,1100,1015,1018,1101,1102],[1102,1086,1096],[1103,1104,1101,1018,1017],[930,932,937,1105],[1105,931,930],[1106,1107,1108],[1109,1106,1108,1110],[1105,937,936,1109,1110,1111],[1111,1112,1105],[1113,1114,1115,1116,1112,1111],[1117,1118,1112,1116],[1111,1119,1113],[1120,1121,1122,1123,1124],[1125,1126,1127,1128],[1129,1130,1120,112`
++`4],[1131,1132,1133,1123,1134,1135],[1136,1137,1138,1139],[1128,1136,1139],[1140,1141,1129,1124],[1128,1139,1142],[1030,1034,1125,1128],[1143,1144,1145],[1135,1143,1145,1146,1131],[1147,1148,1030],[1030,1128,1142,1149,1150,1147],[1150,1134,1123,1122,1147],[1151,1152,1153,1154,1155],[1156,1157,1158,1159],[1160,1161,1162,1163,1164],[1165,1166,1167],[1168,1035,1032],[1169,1168,1032],[1170,1171,1172,1169,1032,1031],[1031,1030,1148,1170],[1173,1174,1175],[1176,1177,1178,1173],[1175,1179,1180],[1181,11`
++`82,1176,1173,1175],[1183,1082,1091,1090],[1090,1089,1093,1181],[1175,1180,1149],[1142,1183,1090,1181,1175,1149],[1184,1185,1186,1187],[1060,1059,1063],[1188,1189,1190],[1191,1061,1060],[1192,1193,1188,1190,1194],[1062,1195,1196,1063],[1197,1198,1199,1200],[1060,1063,1196],[1191,1060,1196,1200,1199,1201],[1201,1192,1194,1191],[1202,1203,1204],[1205,1206,1194],[1207,1205,1194,1190],[1208,1202,1204,1209,1207],[1190,1189,1210],[1208,1207,1190,1210,1211],[1212,1213,1214],[1204,1203,1215],[1216,1209,1`
++`204],[1216,1204,1215,1212,1214,1217],[1217,1218,1216],[1219,1220,1221],[1222,1223,1224],[1225,1226,1227,1214,1213,1228],[1229,1230,1219,1221,1231],[1232,1233,1217],[1214,1227,1222],[1234,1230,1229,1235,1236,1237],[1214,1222,1224,1237,1232,1217],[1235,1238,1236],[1237,1239,1232],[1224,1234,1237],[1240,1241,1242,1243],[1244,1245,1243,1246],[1247,1248,1249,1250],[1251,1246,1243,1242,1250,1249],[1252,1253,1250,1242],[1254,1255,1256,1257],[1258,1259,1260,1261],[1262,1263,1264,1265],[1266,1267,1268],[`
++`1269,1270,1271,1272],[1272,1266,1268],[1273,1269,1272],[1274,1275,1276,1277,1278,1279],[1272,1268,1279,1278,1280,1273],[1279,1281,1282,1274],[1283,1284,1285,1286,1287],[1140,1288,1289],[1290,1291,1292,1293,1294,1295],[1296,1297,1298,1299],[1300,1301,1302],[1299,1141,1140,1289,1300,1302],[1295,1294,1303,1296,1299,1302],[1289,1304,1300],[1305,1306,1307,1308],[1309,1310,1311],[1312,1313,1314,1315],[1308,1315,1314,1316,1317,1305],[1309,1311,1318,1319],[1319,1318,1320,1321],[1316,1321,1320,1317],[132`
++`2,1323,1324],[1322,1324,1325,1108,1107],[1326,1327,1328,1329,1330],[1331,1332,1333,1334],[1220,1335,1336],[1337,1338,1339],[1220,1336,1340,1221],[1341,1226,1225],[1342,1343,1344,1345],[1340,1341,1225],[1346,1337,1339],[1347,1342,1345,1348],[1349,1347,1348],[1228,1350,1351],[1228,1351,1346,1225],[1221,1340,1225],[1348,1231,1221],[1225,1346,1339,1349,1348,1221],[1177,1352,1353,1178],[1354,1355,1356,1145],[1357,1358,1359],[1145,1144,1360],[1178,1353,1361,1362,1357,1359],[1174,1173,1178,1359,1363],[`
++`1179,1175,1174,1360],[1174,1363,1354,1145,1360],[1364,1365,1366,1367],[1368,1369,1370,1371],[1372,1373,1374],[1375,1376,1377],[1374,1378,1379],[1379,1380,1381],[1382,1383,1375,1384,1385],[1381,1386,1387,1384],[1388,1389,1372,1390],[1379,1381,1384,1375,1377,1374],[1390,1372,1374,1377,1391],[1392,1393,1394,1395],[1396,1397,1398],[1267,1292,1291,1396,1398,1268],[1399,1400,1401],[1290,1402,1396,1291],[1398,1403,1404,1281,1279,1268],[1281,1404,1399,1401,1405,1282],[1406,1407,1408,1409],[1410,1411,141`
++`2,1413],[1412,1414,1415,1413],[1416,1417,1418],[1419,1420,1421,1422],[1423,1424,1425],[1426,1423,1425,1324,1323],[1422,1427,1416],[1425,1325,1324],[1416,1418,1428,1429,1426,1323],[1323,1322,1419,1422,1416],[1430,1411,1431,1432],[1433,1434,1435,1436],[1437,1438,1439,1440],[1441,1433,1436,1442],[1443,1444,1440,1439],[1445,1444,1443,1446,1447,1448],[1437,1440,1449,1450,1451,1442],[1448,1450,1449,1445],[1452,1448,1447,1441],[1451,1452,1441,1442],[1339,1338,1453,1454,1455],[1456,1457,1458,1459,1460,1`
++`461],[1462,1463,1456,1461],[1455,1461,1460,1349,1339],[1464,1465,1466,1467],[1468,1469,1470],[1471,1472,1473,1474,1475],[1476,1474,1473,1477,1478],[1479,1480,1481,1482],[1401,1400,1483,1484],[1485,1486,1487,1488,1489],[1487,1490,1491],[1484,1492,1493,1401],[1482,1488,1487,1494,1479],[1491,1405,1401],[1493,1495,1496],[1493,1496,1497],[1487,1491,1401,1493,1497,1494],[1498,1499,1500,1501],[1493,1492,1502,1495],[1495,1502,1503,1504,1505],[1506,1507,1508],[1417,1416,1427],[1427,1422,1421],[1509,1417,`
++`1427,1421,1506,1508],[1510,1511,1512,1513],[1514,1515,1516,1517,1518,1519],[1520,1521,1522],[1523,1458,1457],[1522,1524,1525],[1526,1527,1528],[1522,1525,1526,1528],[1457,1456,1463],[1523,1457,1463],[1529,1530,1531],[1520,1522,1528,1532,1523,1463],[1533,1534,1529,1535,1536],[1463,1462,1537],[1538,1463,1537,1533,1536],[1539,1540,1535,1529,1531],[1463,1538,1541,1520],[1542,1543,1544,1545],[1546,1547,1548,1549,1528],[1528,1527,1550],[1550,1551,1552,1542,1545],[1549,1532,1528],[1550,1545,1553,1554,1`
++`546,1528],[1555,1556,1557,1558],[1559,1560,1561,1562],[1562,1563,1564],[1559,1562,1564,1565,1566,1567],[1568,1569,1570,1571],[1571,1572,1573],[1574,1575,1567,1566,1576],[1566,1568,1571,1573,1577,1576],[1578,1579,1580,1581],[1582,1583,1584],[1582,1584,1585],[1585,1586,1587,1581],[1497,1588,1589,1494],[1589,1582,1585,1581,1580,1494],[1590,1591,1592,1593],[1594,1579,1578,1595],[1581,1596,1597,1598,1595,1578],[1599,1600,1565,1564,1598],[1598,1597,1599],[1601,1602,1603,1604],[1573,1572,1604,1603,1605`
++`],[1508,1507,1577],[1606,1508,1577,1573,1605,1607],[1524,1522,1521,1310,1309],[1608,1524,1309,1609],[1610,1611,1612],[1551,1608,1609,1610,1612],[1612,1552,1551],[1613,1614,1583,1582,1615,1616],[1616,1617,1618,1619,1613],[1589,1588,1620,1621,1615,1582],[1622,1623,1624],[1625,1602,1601,1626],[1509,1508,1606,1624],[1622,1624,1606,1627,1628,1629],[1630,1625,1626],[1627,1630,1626,1628],[1629,1631,1622],[1606,1607,1627],[1632,1633,1634,1635,1621,1620],[1636,1637,1638,1639],[1609,1640,1641],[1609,1641,`
++`1631,1629,1610],[1642,1643,1644,1645],[1646,1647,1648,1649],[1650,1651,1652,1653],[1654,1655,1656,1657],[1617,1658,1659,1618],[1660,1661,1662],[1663,1664,1665],[1666,1667,1668],[1669,1670,1671,1663],[1672,1673,1660,1674],[1669,1663,1665,1662,1666],[1668,1675,1669],[1666,1668,1669],[1674,1660,1662,1665,1676],[1677,1678,1679,1680]],"regions":[503,503,503,503,503,503,503,503,149,149,149,149,149,149,364,364,364,364,364,364,364,29,29,29,29,29,29,29,29,29,29,200,200,200,963,963,963,310,310,310,310,310`
++`,310,310,310,328,328,328,328,328,328,328,328,328,328,328,328,328,328,328,328,328,328,831,285,285,8,8,8,8,8,8,8,969,272,272,272,272,272,272,272,272,272,272,272,272,346,346,346,346,346,346,346,346,346,346,346,346,346,346,346,346,346,22,22,629,750,887,964,965,23,23,23,23,23,23,690,908,908,970,1152,972,909,909,909,909,909,909,909,909,909,909,6,6,6,6,6,6,6,6,6,6,6,6,6,6,975,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,`
++`1,1,1,578,578,578,578,578,578,578,578,578,578,911,911,911,911,911,911,992,992,992,992,992,992,1164,1164,790,982,1168,1168,983,984,730,730,381,381,381,381,381,381,381,381,381,381,381,381,381,381,381,986,986,1180,1180,1180,1180,1180,1180,859,859,859,859,859,859,859,993,994,995,914,914,914,913,878,879,880,1001,1003,1004,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,127,1005,1006,1007,1009,797,1227,1227,1227,1227,1227,915,801,1019,918,584,584,584,584,584,584`
++`,584,584,227,227,227,227,227,227,227,1021,239,239,239,239,239,1023,65,65,65,65,65,65,65,65,1028,88,88,88,88,88,88,447,447,447,447,447,447,447,447,447,113,113,113,113,113,113,113,113,113,113,927,927,927,927,1031,54,54,54,54,54,54,54,54,54,54,54,265,265,265,1036,1036,1036,1036,1036,1036,806,806,806,806,806,332,332,332,332,332,332,332,114,114,114,114,114,114,114,114,114,114,114,114,114,317,317,317,317,317,97,97,97,97,97,1039,461,461,461,461,461,461,461,461,461,1250,1257,1257,1053,1053,1053,1053,105`
++`3,1053,1255,710,1054,20,20,20,20,354,354,354,354,354,354,354,354,1269,1058,523,523,523,1059,370,370,370,370,370,1271,665,188,188,188,188,188,188,188,188,188,188,188,188,39,39,39,39,80,80,80,80,80,80,117,117,117,56,56,56,56,56,56,56,56,56,56,56,56,56,56,1062,808,810,1279,190,190,190,190,68,68,68,68,68,68,68,68,1065,417,417,417,417,417,417,417,417,417,437,437,437,437,437,437,372,372,372,372,372,307,307,307,307,307,307,307,307,307,307,307,931,931,931,931,931,1071,771,814,231,231,231,231,231,231,231`
++`,933,401,401,401,401,401,401,401,1113,1113,1113,1113,1113,1113,1113,419,419,1084,935,490,490,490,490,490,490,490,490,490,490,490,490,490,490,360,360,360,360,360,360,360,360,1087,1292,1092,1092,1092,1092,1092,1092,1092,1092,1092,1089,233,233,233,233,233,233,1090,841,841,205,205,205,205,205,205,205,205,1093,823,823,823,823,823,823,823,823,823,376,376,376,376,1099,1100,1104,1104,25,25,25,25,25,25,25,25,25,25,844,281,281,255,255,255,255,845,846,426,426,426,426,426,426,426,426,426,426,426,426,426,426`
++`,299,299,299,299,299,299,847,164,164,164,94,94,94,94,16,16,16,16,16,16,1112,192,192,181,181,52,52,52,52,220,220,220,220,220,51,51,51,57,57,57,57,57,57,57,57,247,1114,219,219,1116,1117,1118,1119,538,1122,1122,1122,1122,1122,1122,1122,1122,1122,1123],"neighbors":[[-1,-1,-1,7],[-1,111,2],[-1,1,110,5,-1,-1],[-1,-1,-1,5],[-1,10,6],[3,-1,2,-1,7,-1],[-1,4,7],[0,5,6,11,-1,-1],[-1,112,113,-1,13],[-1,-1,13],[4,-1,13],[-1,7,13],[65,-1,13],[9,11,10,8,-1,12],[86,91,19],[-1,-1,17],[96,86,18,-1],[15,-1,19],[-1`
++`,16,19],[-1,-1,18,14,17,20],[-1,-1,19],[-1,152,28],[-1,-1,33,27],[-1,-1,26,-1],[42,-1,25],[24,-1,26],[-1,25,23,-1,30],[-1,22,30],[33,-1,21,172,-1,30],[-1,-1,-1,30],[-1,26,29,27,28],[-1,-1,33,32],[-1,105,-1,31],[-1,28,22,-1,-1,31],[-1,-1,-1,36],[-1,-1,36,-1],[-1,34,35,-1,-1],[-1,-1,41],[46,-1,41],[-1,45,44],[-1,-1,42,43,-1,44],[38,37,43,-1],[24,-1,40,-1],[41,-1,40,-1],[-1,-1,40,39,59],[39,-1,47],[-1,38,47],[45,46,53,-1,57],[-1,-1,49],[-1,48,-1,61],[-1,-1,52],[-1,-1,55],[-1,50,-1,59],[-1,-1,47],[-`
++`1,-1,56],[-1,-1,51,60,-1,-1],[54,-1,62,60],[47,-1,59],[-1,-1,59],[-1,58,44,57,52,62],[55,-1,56,-1],[-1,49,-1,-1,62],[-1,56,61,-1,59],[-1,-1,-1,-1],[-1,68,103,104,-1,65],[64,-1,-1,12,-1],[-1,-1,-1,70],[-1,-1,68],[64,-1,67,145,72,103],[-1,-1,72],[-1,-1,66,-1,72],[-1,-1,72],[70,69,71,104,68,139],[-1,-1,-1,-1],[-1,-1,77,-1],[-1,87,-1,77],[-1,-1,82,-1,81],[-1,75,85,74,-1,98],[-1,-1,81],[-1,-1,84],[-1,-1,-1,-1,81],[76,-1,78,-1,80,-1],[76,-1,140,-1,84,85],[-1,-1,84],[83,-1,82,-1,79],[-1,77,-1,82],[14,1`
++`6,100,-1,102,94],[75,-1,95,-1],[-1,97,-1,89],[-1,-1,88,-1,102],[-1,-1,97],[-1,14,94],[-1,-1,95,100],[-1,-1,99],[-1,105,-1,91,86],[-1,87,-1,92],[16,-1,100],[88,90,99],[-1,77,99],[98,-1,101,93,97,100],[96,92,-1,99,-1,86],[246,-1,99],[-1,89,86],[64,68,104],[-1,64,103,72],[-1,94,-1,32],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,2,112],[1,-1,115],[-1,110,115,8],[-1,8,115,173,193],[-1,-1,115],[112,111,114,199,173,113],[-1,-1,-1,-1],[-1,-1,-1,118],[-1,-1,117,-1],[-1,-1,-1,-1],[-1`
++`,-1,-1,-1,-1],[-1,-1,-1,-1],[125,-1,123],[-1,122,-1,124],[-1,123,128,-1],[-1,-1,-1,126,122,-1],[-1,125,130],[-1,-1,129,-1],[124,-1,130,131],[127,-1,131],[-1,-1,-1,128,126],[-1,-1,-1,129,128],[-1,-1,136],[-1,-1,136],[-1,-1,137,-1,-1],[-1,-1,143,145],[132,-1,141,133,143,-1],[-1,-1,144,-1,134],[-1,-1,145,-1],[-1,72,140],[-1,139,145,-1,82],[-1,-1,136],[-1,-1,145],[-1,136,135],[137,-1,145],[138,142,140,68,144,135],[-1,-1,-1,-1],[-1,280,150],[-1,-1,-1,160,-1],[-1,-1,150,-1,170],[147,286,-1,149,-1,-1],`
++`[-1,-1,166],[168,21,-1,-1,167,-1],[-1,-1,170,-1],[-1,201,-1,161],[-1,-1,165],[159,-1,158],[-1,203,-1,165],[156,-1,166],[-1,156,-1,171],[148,-1,163,-1],[-1,154,165],[-1,-1,-1,165],[160,-1,164],[163,-1,166,167],[161,155,172,-1,162,157],[-1,158,-1,164,151],[164,-1,152],[152,-1,169],[168,-1,172],[149,153,172],[-1,159,172],[28,169,171,170,165,-1],[113,115,200],[-1,-1,-1,195],[329,-1,182,-1,330],[-1,-1,-1,178],[-1,-1,196],[-1,176,187,192],[-1,-1,181],[-1,-1,-1,185],[-1,179,185,-1,-1,184],[-1,175,199],`
++`[-1,333,186],[-1,-1,-1,181],[-1,180,195,-1,189,181],[-1,183,194,188,197],[-1,-1,178],[-1,-1,186],[-1,-1,185,-1],[-1,-1,-1,191],[190,-1,192],[-1,191,178,200],[-1,113,198],[332,-1,186],[185,-1,174,196],[195,177,200],[-1,186,199],[-1,-1,193,200],[197,-1,200,115,-1,182],[-1,196,192,198,173,199],[154,-1,208],[-1,-1,-1,206,-1,205],[-1,157,-1,207],[-1,-1,205],[-1,204,202,-1,208],[-1,202,-1,209],[-1,203,208],[205,-1,210,201,207],[-1,206,210],[-1,209,-1,208],[-1,-1,-1,214],[-1,-1,-1,-1,-1,216],[-1,-1,214`
++`,-1,-1],[211,-1,215,213],[-1,214,216],[215,-1,212],[-1,-1,-1,222],[-1,-1,-1,219],[-1,218,-1,220],[-1,-1,219,221,-1],[220,-1,222],[-1,221,217,-1],[-1,-1,224],[-1,223,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,228],[-1,227,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,232],[-1,-1,231,-1],[-1,-1,238,237,-1],[-1,-1,246],[317,315,241,-1],[-1,-1,-1,245],[-1,-1,239,233],[-1,-1,-1,233],[-1,237,-1,246,245],[-1,-1,243,-1,245],[235,314,-1,-1,-1,247],[-1,-1,246,-1],[-1,-1,247,-1,240],[-1,-1,`
++`246],[239,-1,236,240,-1],[-1,244,239,234,242,101],[241,-1,243],[-1,-1,249],[-1,-1,248,-1],[-1,-1,-1,-1,252],[-1,-1,253,-1],[-1,-1,250,254,-1,-1],[251,-1,-1,-1,255],[252,-1,255],[-1,254,-1,253],[-1,-1,262,-1,260,-1],[-1,-1,259],[-1,-1,261],[262,-1,257,-1,261,-1],[-1,-1,256],[258,-1,-1,259],[259,-1,256,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,267,-1],[-1,-1,266,-1,268],[-1,-1,-1,-1,267],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[3`
++`44,279,-1,290,-1],[-1,-1,283,-1],[-1,321,322,290],[-1,276,-1,-1,281,282],[147,-1,289],[-1,-1,279],[279,-1,283],[-1,282,277,-1,290],[-1,-1,-1,292],[-1,-1,297,-1,298],[-1,150,289],[322,-1,291],[-1,-1,289],[-1,286,280,292,288,298],[322,276,-1,283,293,278],[-1,-1,294,298,287,293],[-1,-1,284,289,-1],[290,-1,291],[-1,-1,291],[-1,323,296],[-1,295,298],[-1,-1,285,-1],[296,327,291,285,-1,289],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1],[306,-1,305,-1],[304,-1,308,-1],[304,`
++`-1,307],[-1,306,308],[-1,307,-1,-1,305],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[-1,356,318],[-1,241,315],[314,235,320,-1],[-1,-1,320],[-1,-1,320,235],[-1,313,319,-1,320],[-1,-1,318,358],[-1,-1,315,317,316,318],[278,-1,322],[-1,290,278,321,287,327],[-1,-1,325,295],[-1,-1,-1,327],[-1,-1,327,323],[-1,348,327],[322,298,325,324,326,346],[-1,-1,-1,-1,-1,-1],[-1,175,331],[175,-1,331],[329,330,333],[337,-1,194,333],[183,331,-1,-1,338,332],[-1,-1,-1],[-1,-1,339,342],[-1,-1,338,-1],[-1`
++`,332,341],[336,-1,342,333,-1,340],[-1,451,335],[-1,-1,-1,338],[-1,337,342],[-1,335,454,-1,341,338],[-1,-1,-1,-1],[-1,-1,-1,276,347],[-1,417,348],[-1,327,348,-1,349],[344,-1,349,-1,-1],[-1,345,428,346,326],[-1,347,346],[-1,420,354],[399,-1,357,355,-1,353],[-1,-1,357],[-1,400,351],[-1,350,357,-1,356],[-1,-1,351,-1],[313,-1,-1,-1,354,358],[352,-1,354,422,-1,351],[-1,-1,319,356],[-1,-1,362,-1],[-1,-1,364],[-1,433,-1,367,368],[359,-1,367,377,-1,-1],[-1,-1,364],[363,360,367,-1],[-1,-1,367],[-1,379,367`
++`],[362,364,365,361,366,384],[-1,-1,361],[-1,-1,-1,-1,371,-1],[-1,-1,-1,372],[-1,369,-1,372],[370,-1,371],[-1,-1,-1,-1],[-1,-1,378,-1],[-1,-1,384],[456,460,-1,379],[-1,362,378],[-1,377,384,-1,374],[376,-1,384,366,380],[-1,456,379],[466,-1,382],[-1,381,-1,384],[419,-1,384,-1,423],[378,367,379,382,383,375],[-1,405,386],[-1,385,387,-1,-1],[-1,386,405,-1,417],[-1,-1,392],[-1,-1,391],[-1,-1,392],[-1,389,393],[390,388,393],[-1,-1,392,-1,-1,391],[-1,-1,397,-1],[-1,-1,396,398],[-1,-1,-1,395,-1,-1],[394,-`
++`1,398],[-1,-1,-1,395,397,-1],[-1,351,400],[399,353,-1,404,-1,-1],[-1,-1,-1,403,405],[-1,-1,403,-1],[402,-1,401],[400,-1,405],[385,-1,-1,404,401,387],[-1,-1,418,-1,413,416],[-1,-1,418],[-1,-1,413],[-1,-1,425,418,-1],[493,-1,413,492],[-1,-1,416,-1],[496,492,413,-1],[-1,408,-1,412,410,406],[426,428,417],[-1,-1,418],[411,-1,406],[345,-1,387,-1,418,414],[407,415,406,-1,409,417],[-1,383,421],[-1,-1,422,350,-1,423],[-1,419,423,-1,-1],[-1,357,420],[-1,-1,420,421,383],[-1,-1,426],[409,-1,426],[414,425,42`
++`7,424,428],[-1,-1,426],[414,426,348],[-1,-1,-1,-1],[-1,-1,-1,431],[-1,-1,432,-1,435,430],[-1,-1,431,433],[361,-1,432,-1],[483,-1,437],[431,-1,-1,438,-1],[-1,-1,437],[434,436,438,-1],[-1,435,437],[-1,-1,-1,-1,-1,-1],[-1,-1,441],[-1,-1,440],[443,-1,-1,445,-1],[-1,442,-1,444],[-1,443,-1,446,447,-1],[442,-1,-1,-1,446,-1],[445,-1,444],[-1,-1,444],[-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1],[339,-1,-1,-1,453,454],[-1,491,453],[452,489,451,-1],[488,-1,342,451],[-1,-1,461],[-1,-1,-1,462,376,380],[-1,465,-`
++`1,460],[522,521,462,-1,509],[519,-1,461],[-1,457,-1,376,462],[459,455,462],[458,461,-1,460,456,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,457,-1,467,-1,466],[381,-1,465,-1],[471,-1,465,-1,473],[-1,-1,-1,-1],[-1,-1,470,532,534,473],[536,532,469,-1],[-1,467,472],[-1,471,473,-1,-1],[-1,469,-1,472,467,-1],[-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,-1,482,-1],[-1,-1,478],[-1,477,481,-1,487],[528,527,486],[-1,528,484],[-1,-1,478],[476,-1,485,527],[434,-1,487,-1],[-1,480,486],[-1,-1,487,482],[484,479,487],[-1,483,`
++`490,478,486,485],[-1,454,489],[-1,488,453,491,-1,490],[-1,487,489],[-1,-1,489,452,-1],[410,412,496,493],[-1,410,492],[-1,594,495],[-1,494,-1,496],[492,412,-1,495,-1,497],[498,-1,496],[-1,-1,-1,499,497,500],[-1,-1,498,-1],[-1,-1,498],[-1,-1,514,-1,503],[-1,-1,-1,509],[-1,-1,501,507],[-1,-1,-1,514,-1,511],[-1,-1,-1,506],[-1,505,508],[583,-1,503,-1],[506,-1,513],[458,-1,502,513],[-1,614,511],[-1,510,-1,-1,504],[-1,522,513],[509,508,530,-1,514,512],[-1,504,501,-1,513],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],`
++`[-1,-1,-1,-1,-1],[-1,-1,-1],[-1,459,520],[-1,519,521],[-1,-1,-1,520,458,522],[458,512,-1,521],[616,617,526],[-1,611,616,526],[617,-1,529],[-1,-1,524,523,530],[-1,482,479,530],[479,480,-1,530],[525,-1,530],[-1,527,528,526,529,513],[-1,-1,-1,-1],[469,470,538],[-1,545,535],[-1,469,539],[-1,-1,533,543,540],[-1,-1,538,470],[-1,-1,539,-1],[532,536,539],[534,538,-1,537,-1,540],[-1,535,-1,539],[-1,548,544],[-1,-1,543],[-1,542,535,546],[-1,541,549,-1,546],[533,-1,546],[544,543,545,-1,-1],[-1,554,550],[54`
++`1,-1,550],[-1,544,550],[549,548,-1,547,559,551],[-1,-1,550],[-1,599,555],[-1,-1,559],[600,-1,557,547,-1,607],[558,-1,552,609,-1],[-1,-1,559],[554,-1,559],[-1,555,-1,560,-1,562],[557,553,562,561,556,550],[-1,-1,558],[-1,-1,559],[-1,558,559],[-1,-1,566,-1],[-1,-1,566,-1],[-1,-1,566,-1],[-1,564,563,567,565,-1],[-1,-1,566,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,632,573],[-1,-1,-1,574],[-1,571,576],[-1,572,576],[-1,-1,-1,-1,576,577],[573,635,575,-1,-1,574],[635,636,-1,575],[-1,-1,-1,-1,-1],`
++`[-1,-1,583],[634,632,-1,-1,584,-1],[-1,-1,-1,584],[-1,-1,583],[-1,507,579,585,582,584],[580,-1,-1,581,583,-1],[-1,-1,583],[-1,-1,-1,589],[728,-1,590],[-1,-1,589,-1],[-1,588,-1,592,-1,586],[587,-1,591,-1],[590,-1,592,-1],[-1,591,-1,589],[647,643,594],[593,645,-1,494,-1],[-1,-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,599],[-1,658,603],[597,-1,608,552],[-1,554,602],[-1,-1,-1,604],[-1,600,608],[-1,598,610],[-1,601,-1,605],[-1,604,610],[-1,-1,607],[606,-1,610,554],[599,602,610],[-1,555,610],[607,603,661,605,6`
++`09,608],[-1,-1,615,524],[-1,-1,-1,618],[-1,-1,615],[510,-1,618],[611,-1,-1,-1,613,616],[523,524,615,-1,618],[525,523,618,-1],[616,-1,612,614,617],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,629],[-1,-1,628],[-1,-1,628],[-1,-1,628],[-1,-1,628,-1,-1],[-1,-1,-1,628],[-1,-1,629,-1],[624,626,625,622,629,623],[627,621,628,-1,-1],[-1,-1,-1,-1],[-1,-1,632],[-1,580,634,631,635,571],[-1,667,636],[-1,-1,632,580],[-1,-1,636,577,576,632],[635,-1,633,672,-1,577],[-1,-1,-1,-1],[-1,-1,639,-1],[-1,-1,-1,638],[680,-1,646]`
++`,[-1,-1,681,647],[-1,-1,643],[-1,642,645,593,646],[681,680,647],[-1,594,643],[640,-1,-1,-1,643,647],[593,-1,641,644,646],[-1,-1,-1,-1],[-1,-1,-1,651],[-1,-1,652,654],[-1,649,-1,657],[653,-1,650,-1],[-1,652,-1,-1,656,655],[650,-1,655,-1,657,-1],[-1,654,-1,653],[-1,653,-1,657],[-1,656,651,654],[598,-1,-1,-1,661],[690,686,-1,-1,661,660],[695,690,659,-1],[-1,659,-1,610,658],[-1,-1,-1,-1],[-1,-1,-1],[-1,-1,665,-1,-1],[-1,664,-1,-1,-1],[-1,-1,-1,671],[633,-1,-1,670],[-1,-1,671,-1,-1],[-1,-1,675],[-1,6`
++`77,675,667],[-1,668,675,-1,666],[-1,636,675],[677,-1,674],[673,-1,675],[669,672,670,674,717,671],[-1,-1,-1,-1],[670,-1,678,673],[677,-1,-1,-1,-1],[-1,726,682],[640,644,682],[644,641,682],[-1,680,681,-1,679,738],[-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,728,693],[-1,659,691],[728,-1,689],[-1,701,689],[687,-1,688,693],[659,660,691],[686,690,693],[-1,-1,697],[685,689,703,-1,691,698],[-1,-1,697,-1,696],[660,-1,696],[698,695,-1,694,-1],[-1,-1,694,692,-1],[696,-1,-1,693],[-1,-1,-1,702],[-1,-1,-1,703,704],`
++`[688,-1,704],[-1,732,-1,699,704],[-1,693,700],[702,-1,-1,-1,700,701],[-1,-1,-1,-1],[-1,-1,-1,708],[-1,-1,708],[706,707,722,-1,711,-1],[-1,-1,-1,712],[-1,725,712],[-1,-1,708,712,-1],[-1,709,710,727,-1,711],[720,-1,718,721],[733,-1,715],[714,-1,718],[-1,-1,-1,718],[-1,735,718,675],[735,715,716,713,-1,717],[-1,-1,-1,-1],[-1,713,721,-1],[-1,-1,723,-1,720,713],[-1,-1,708,-1,723],[721,-1,722],[737,-1,725,-1],[710,-1,724,-1,727],[679,-1,727],[738,726,712,725,-1,743],[687,685,-1,587,729],[-1,728,-1,731]`
++`,[-1,-1,731],[-1,729,747,730,732],[-1,702,731],[-1,-1,714,735,-1,734],[-1,752,-1,-1,733],[717,-1,744,-1,733,718],[-1,-1,739],[-1,724,-1,740],[682,727,739,-1],[736,738,743,741,-1,742],[-1,737,741],[-1,740,-1,739],[747,-1,739],[727,-1,739],[-1,-1,-1,-1,735,-1],[-1,-1,-1,-1],[-1,-1,747],[746,-1,742,-1,731],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,-1],[-1,-1,-1,734],[-1,-1,761],[-1,-1,758],[-1,-1,760],[-1,-1,-1,758],[-1,-1,761,-1],[756,754,761,-1,760],[-1,-1,760],[755,759,758],[757,753,75`
++`8,-1,-1],[-1,-1,-1,-1]]},"meshdetail":{"verts":[{"x":-2165,"y":-1045,"z":128},{"x":-2159,"y":-1057,"z":129},{"x":-2129,"y":-1057,"z":129},{"x":-2123,"y":-1045,"z":128},{"x":-1841,"y":-1045,"z":128},{"x":-1823,"y":-1045,"z":128},{"x":-1823,"y":-991,"z":129},{"x":-1847,"y":-1057,"z":129},{"x":-1841,"y":-1045,"z":128},{"x":-1823,"y":-991,"z":129},{"x":-1850,"y":-959.5,"z":128},{"x":-1859,"y":-949,"z":120},{"x":-1869.29,"y":-962.71,"z":128},{"x":-1931,"y":-1045,"z":129},{"x":-1925,"y":-1057,"z":129}`
++`,{"x":-2057,"y":-1045,"z":129},{"x":-2051,"y":-1057,"z":129},{"x":-1979,"y":-1057,"z":129},{"x":-1973,"y":-1045,"z":128},{"x":-2045,"y":-865,"z":116},{"x":-2033,"y":-859,"z":116},{"x":-2087,"y":-799,"z":116},{"x":-2057,"y":-1045,"z":129},{"x":-1973,"y":-1045,"z":128},{"x":-1931,"y":-1045,"z":129},{"x":-1869.29,"y":-962.71,"z":128},{"x":-1859,"y":-949,"z":120},{"x":-1891.73,"y":-949,"z":128},{"x":-1908.09,"y":-949,"z":119},{"x":-2039,"y":-949,"z":120},{"x":-2049.5,"y":-961,"z":128},{"x":-2123,"y"`
++`:-1045,"z":128},{"x":-1916,"y":-964,"z":128},{"x":-2024,"y":-982,"z":128},{"x":-2039,"y":-949,"z":120},{"x":-2045,"y":-865,"z":116},{"x":-2087,"y":-799,"z":116},{"x":-2165,"y":-1045,"z":128},{"x":-2123,"y":-1045,"z":128},{"x":-2049.5,"y":-961,"z":128},{"x":-2039,"y":-949,"z":120},{"x":-2087,"y":-799,"z":116},{"x":-2219,"y":-799,"z":120},{"x":-2213,"y":-1045,"z":128},{"x":-2084,"y":-964,"z":128},{"x":-1865,"y":-853,"z":115},{"x":-1847,"y":-871,"z":116},{"x":-1793,"y":-823,"z":116},{"x":-1787,"y":`
++`-655,"z":129},{"x":-1805,"y":-643,"z":129},{"x":-2075,"y":-517,"z":107},{"x":-2099,"y":-529,"z":110},{"x":-2162.33,"y":-592.33,"z":126},{"x":-2213,"y":-643,"z":128},{"x":-2175.36,"y":-608.64,"z":128},{"x":-2087,"y":-799,"z":116},{"x":-2033,"y":-859,"z":116},{"x":-1865,"y":-853,"z":115},{"x":-2213,"y":-643,"z":128},{"x":-2219,"y":-799,"z":120},{"x":-2087,"y":-799,"z":116},{"x":-1805,"y":-445,"z":88},{"x":-1855.62,"y":-445,"z":88},{"x":-1872.5,"y":-445,"z":77},{"x":-1906.25,"y":-445,"z":77},{"x":-`
++`2075,"y":-445,"z":89},{"x":-2075,"y":-517,"z":107},{"x":-1872.5,"y":-463,"z":81},{"x":-1855.62,"y":-458.5,"z":88},{"x":-2075,"y":-517,"z":107},{"x":-2175.36,"y":-608.64,"z":128},{"x":-2213,"y":-643,"z":128},{"x":-2087,"y":-799,"z":116},{"x":-1865,"y":-853,"z":115},{"x":-1805,"y":-643,"z":129},{"x":-1805,"y":-610,"z":128},{"x":-1805,"y":-445,"z":88},{"x":-1855.62,"y":-458.5,"z":88},{"x":-1872.5,"y":-463,"z":81},{"x":-2078,"y":-628,"z":128},{"x":-1808,"y":-538,"z":104},{"x":-2078,"y":-700,"z":128}`
++`,{"x":-1985,"y":1181,"z":32},{"x":-1985,"y":1205,"z":32},{"x":-2051,"y":1271,"z":33},{"x":-2051,"y":1271,"z":33},{"x":-2177,"y":1271,"z":40},{"x":-2177,"y":1259,"z":40},{"x":-1973,"y":1049,"z":34},{"x":-1973,"y":1181,"z":32},{"x":-1985,"y":1181,"z":32},{"x":-1991,"y":1049,"z":35},{"x":-2051,"y":1271,"z":33},{"x":-2177,"y":1259,"z":40},{"x":-2195,"y":1253,"z":39},{"x":-1997,"y":1031,"z":35},{"x":-1991,"y":1049,"z":35},{"x":-1985,"y":1181,"z":32},{"x":-2183,"y":1049,"z":39},{"x":-2177,"y":1031,"z"`
++`:40},{"x":-1997,"y":1031,"z":35},{"x":-1985,"y":1181,"z":32},{"x":-2051,"y":1271,"z":33},{"x":-2195,"y":1253,"z":39},{"x":-2195,"y":1253,"z":39},{"x":-2201,"y":1049,"z":39},{"x":-2183,"y":1049,"z":39},{"x":-1781,"y":1871,"z":0},{"x":-1775,"y":1859,"z":0},{"x":-1757,"y":1871,"z":0},{"x":-2135,"y":2045,"z":3},{"x":-2165,"y":2039,"z":4},{"x":-2165,"y":1991,"z":4},{"x":-1979,"y":1991,"z":-1},{"x":-2165,"y":2417,"z":25},{"x":-2165,"y":2345,"z":11},{"x":-2135,"y":2339,"z":7},{"x":-1979,"y":2417,"z":14`
++`},{"x":-2063.55,"y":2417,"z":12},{"x":-1871,"y":2459,"z":21},{"x":-1967,"y":2453,"z":20},{"x":-1967,"y":2429,"z":16},{"x":-1871,"y":2459,"z":21},{"x":-1967,"y":2429,"z":16},{"x":-1979,"y":2417,"z":14},{"x":-1871,"y":2321,"z":0},{"x":-1871,"y":2459,"z":21},{"x":-1979,"y":2417,"z":14},{"x":-2135,"y":2339,"z":7},{"x":-2141,"y":2297,"z":3},{"x":-2135,"y":2081,"z":3},{"x":-2135,"y":2045,"z":3},{"x":-1979,"y":1991,"z":-1},{"x":-1979,"y":1991,"z":-1},{"x":-1859,"y":1871,"z":0},{"x":-1781,"y":1871,"z":0`
++`},{"x":-1757,"y":1871,"z":0},{"x":-1757,"y":2119.64,"z":-5},{"x":-1757,"y":2315,"z":2},{"x":-1853,"y":2309,"z":0},{"x":-2141,"y":2297,"z":3},{"x":-2195,"y":2297,"z":4},{"x":-2195,"y":2087,"z":4},{"x":-2135,"y":2081,"z":3},{"x":-1853,"y":2309,"z":0},{"x":-1871,"y":2321,"z":0},{"x":-2141,"y":2297,"z":3},{"x":-2135,"y":2081,"z":3},{"x":-1979,"y":1991,"z":-1},{"x":-1931,"y":1805,"z":32},{"x":-1877,"y":1805,"z":0},{"x":-1877,"y":1859,"z":0},{"x":-2039,"y":1805,"z":24},{"x":-2023.57,"y":1805,"z":32},{`
++`"x":-1940,"y":1832,"z":8},{"x":-2039,"y":1805,"z":24},{"x":-2033,"y":1793,"z":32},{"x":-1937,"y":1793,"z":32},{"x":-1931,"y":1805,"z":32},{"x":-2023.57,"y":1805,"z":32},{"x":-1877,"y":1859,"z":0},{"x":-1859,"y":1871,"z":0},{"x":-1979,"y":1991,"z":-1},{"x":-2165,"y":1991,"z":4},{"x":-2165,"y":1799,"z":4},{"x":-2086.25,"y":1802.75,"z":0},{"x":-2070.5,"y":1803.5,"z":16},{"x":-2039,"y":1805,"z":24},{"x":-2066,"y":1826,"z":16},{"x":-2084,"y":1826,"z":8},{"x":-2093,"y":2459,"z":63},{"x":-2117,"y":2453`
++`,"z":62},{"x":-2117,"y":2441,"z":63},{"x":-2081,"y":2429,"z":65},{"x":-1979,"y":2429,"z":65},{"x":-1979,"y":2459,"z":65},{"x":-2027,"y":2459,"z":65},{"x":-2081,"y":2429,"z":65},{"x":-2087,"y":2501,"z":69},{"x":-2093,"y":2459,"z":63},{"x":-2081,"y":2429,"z":65},{"x":-2027,"y":2459,"z":65},{"x":-2027,"y":2495,"z":69},{"x":-1805,"y":2645,"z":32},{"x":-1823,"y":2645,"z":33},{"x":-1829,"y":2615,"z":33},{"x":-1757,"y":2675,"z":32},{"x":-1793,"y":2669,"z":32},{"x":-1805,"y":2645,"z":32},{"x":-1865,"y":`
++`2651,"z":33},{"x":-1823,"y":2687,"z":33},{"x":-1829,"y":2699,"z":32},{"x":-2021,"y":2513,"z":31},{"x":-2015,"y":2471,"z":30},{"x":-1979,"y":2471,"z":25},{"x":-1865,"y":2471,"z":24},{"x":-1859,"y":2615,"z":34},{"x":-1865,"y":2651,"z":33},{"x":-1940,"y":2516,"z":22},{"x":-1757,"y":2675,"z":32},{"x":-1805,"y":2645,"z":32},{"x":-1829,"y":2615,"z":33},{"x":-1757,"y":2471,"z":28},{"x":-1967,"y":2453,"z":21},{"x":-1871,"y":2459,"z":22},{"x":-1865,"y":2471,"z":24},{"x":-1979,"y":2471,"z":25},{"x":-1757,`
++`"y":2471,"z":28},{"x":-1829,"y":2615,"z":33},{"x":-1859,"y":2615,"z":34},{"x":-1865,"y":2471,"z":24},{"x":-2105,"y":2705,"z":36},{"x":-2111,"y":2513,"z":35},{"x":-2021,"y":2513,"z":31},{"x":-1865,"y":2651,"z":33},{"x":-1829,"y":2699,"z":32},{"x":-1829,"y":2699,"z":32},{"x":-1823,"y":2687,"z":33},{"x":-1805,"y":2687,"z":32},{"x":-1805,"y":2687,"z":32},{"x":-1793,"y":2669,"z":32},{"x":-1757,"y":2675,"z":32},{"x":-1829,"y":2699,"z":32},{"x":-1805,"y":2687,"z":32},{"x":-1757,"y":2675,"z":32},{"x":-1`
++`787,"y":2759,"z":33},{"x":-1799,"y":2771,"z":32},{"x":-2003,"y":3065,"z":33},{"x":-1973,"y":3065,"z":32},{"x":-1973,"y":3125,"z":33},{"x":-2015,"y":3053,"z":33},{"x":-2003,"y":3065,"z":33},{"x":-1973,"y":3125,"z":33},{"x":-2111,"y":3125,"z":36},{"x":-1787,"y":2807,"z":31},{"x":-1757,"y":2807,"z":33},{"x":-1757,"y":2873,"z":34},{"x":-1793,"y":2999,"z":32},{"x":-1859,"y":2999,"z":34},{"x":-1859,"y":2963,"z":33},{"x":-1799,"y":2795,"z":31},{"x":-1787,"y":2807,"z":31},{"x":-1757,"y":2873,"z":34},{"x`
++`":-1889,"y":2873,"z":32},{"x":-1757,"y":2675,"z":32},{"x":-1757,"y":2759,"z":33},{"x":-1787,"y":2759,"z":33},{"x":-1895,"y":2957,"z":36},{"x":-1895,"y":3011,"z":34},{"x":-1979,"y":2999,"z":32},{"x":-1751,"y":2891,"z":35},{"x":-1751,"y":2921,"z":33},{"x":-1793,"y":2999,"z":32},{"x":-1859,"y":2963,"z":33},{"x":-1865,"y":2933,"z":38},{"x":-1859,"y":2891,"z":35},{"x":-1895,"y":2957,"z":36},{"x":-1979,"y":2999,"z":32},{"x":-2009,"y":3005,"z":32},{"x":-1901,"y":2927,"z":36},{"x":-1829,"y":2699,"z":32}`
++`,{"x":-1799,"y":2771,"z":32},{"x":-1799,"y":2795,"z":31},{"x":-2033,"y":2813,"z":32},{"x":-2105,"y":2813,"z":34},{"x":-2105,"y":2705,"z":35},{"x":-2021,"y":2825,"z":32},{"x":-2033,"y":2813,"z":32},{"x":-2105,"y":2705,"z":35},{"x":-1829,"y":2699,"z":32},{"x":-1799,"y":2795,"z":31},{"x":-1889,"y":2873,"z":32},{"x":-1865,"y":2933,"z":38},{"x":-1859,"y":2963,"z":33},{"x":-1895,"y":2957,"z":36},{"x":-1901,"y":2927,"z":36},{"x":-2009,"y":3005,"z":32},{"x":-2015,"y":3053,"z":33},{"x":-2111,"y":3125,"z"`
++`:36},{"x":-2105,"y":2897,"z":33},{"x":-2021,"y":2891,"z":32},{"x":-1889,"y":2873,"z":32},{"x":-1901,"y":2927,"z":36},{"x":-2009,"y":3005,"z":32},{"x":-2021,"y":2891,"z":32},{"x":-2021,"y":2825,"z":32},{"x":-2033,"y":2831,"z":90},{"x":-2033,"y":2885,"z":90},{"x":-2093,"y":2885,"z":90},{"x":-2093,"y":2825,"z":90},{"x":-1799,"y":-127,"z":9},{"x":-1781,"y":-103,"z":8},{"x":-1793,"y":-85,"z":8},{"x":-1853,"y":-25,"z":0},{"x":-2033,"y":-25,"z":9},{"x":-2039,"y":-115,"z":8},{"x":-1867.57,"y":-123.57,"z`
++`":-1},{"x":-1850.43,"y":-124.43,"z":9},{"x":-1850,"y":-82,"z":8},{"x":-1958,"y":-28,"z":0},{"x":-1799,"y":-127,"z":9},{"x":-1850.43,"y":-124.43,"z":9},{"x":-1867.57,"y":-123.57,"z":-1},{"x":-2039,"y":-115,"z":8},{"x":-2069,"y":-121,"z":8},{"x":-2075,"y":-445,"z":87},{"x":-2024.37,"y":-445,"z":80},{"x":-1990.62,"y":-445,"z":88},{"x":-1973.75,"y":-445,"z":77},{"x":-1940,"y":-445,"z":76},{"x":-1805,"y":-445,"z":80},{"x":-1804.33,"y":-409.67,"z":80},{"x":-1803.67,"y":-374.33,"z":64},{"x":-1976,"y":-`
++`202,"z":16},{"x":-1850,"y":-418,"z":80},{"x":-1886,"y":-148,"z":4},{"x":-1814,"y":-382,"z":72},{"x":-2045,"y":491,"z":20},{"x":-2057,"y":491,"z":32},{"x":-2057,"y":461,"z":27},{"x":-2045,"y":461,"z":20},{"x":-1745,"y":-103,"z":17},{"x":-1727,"y":-115,"z":32},{"x":-1718,"y":-109,"z":32},{"x":-1709,"y":-103,"z":8},{"x":-1721,"y":-103,"z":20},{"x":-1718,"y":-106,"z":8},{"x":-1793,"y":-85,"z":8},{"x":-1781,"y":-103,"z":8},{"x":-1757,"y":-103,"z":8},{"x":-1745,"y":-103,"z":17},{"x":-1721,"y":-103,"z"`
++`:20},{"x":-1709,"y":-103,"z":8},{"x":-1709.6,"y":-50.8,"z":8},{"x":-1709.8,"y":-33.4,"z":0},{"x":-1715,"y":419,"z":1},{"x":-1793,"y":143,"z":0},{"x":-1730,"y":-94,"z":8},{"x":-2045,"y":449,"z":9},{"x":-2057,"y":449,"z":21},{"x":-2059,"y":433,"z":8},{"x":-2063,"y":401,"z":8},{"x":-2054,"y":446,"z":21},{"x":-1793,"y":497,"z":8},{"x":-2045,"y":503,"z":12},{"x":-2045,"y":491,"z":20},{"x":-2045,"y":461,"z":20},{"x":-2045,"y":449,"z":9},{"x":-2036,"y":476,"z":11},{"x":-2063,"y":401,"z":8},{"x":-2057,"`
++`y":155,"z":9},{"x":-2039,"y":143,"z":8},{"x":-1793,"y":497,"z":8},{"x":-2045,"y":449,"z":9},{"x":-2063,"y":401,"z":8},{"x":-2039,"y":143,"z":8},{"x":-1793,"y":143,"z":0},{"x":-1715,"y":419,"z":1},{"x":-1874,"y":440,"z":1},{"x":-2057,"y":533,"z":63},{"x":-2057,"y":515,"z":63},{"x":-1793,"y":515,"z":61},{"x":-1793,"y":533,"z":61},{"x":-1547,"y":971,"z":35},{"x":-1547,"y":995,"z":36},{"x":-1565,"y":1001,"z":35},{"x":-1613,"y":965,"z":32},{"x":-1721,"y":1007,"z":33},{"x":-1733,"y":1001,"z":34},{"x":`
++`-1733,"y":971,"z":36},{"x":-1715,"y":965,"z":34},{"x":-1829,"y":593,"z":32},{"x":-1811,"y":545,"z":32},{"x":-1787,"y":545,"z":32},{"x":-1715,"y":701,"z":32},{"x":-1757,"y":689,"z":32},{"x":-1721,"y":1043,"z":32},{"x":-1721,"y":1007,"z":33},{"x":-1715,"y":965,"z":34},{"x":-1613,"y":965,"z":32},{"x":-1565,"y":1001,"z":35},{"x":-1565,"y":1043,"z":35},{"x":-1799,"y":689,"z":33},{"x":-1805,"y":701,"z":35},{"x":-1913,"y":689,"z":36},{"x":-1319,"y":545,"z":36},{"x":-1319,"y":599,"z":39},{"x":-1409,"y":`
++`599,"z":33},{"x":-1919,"y":599,"z":32},{"x":-2057,"y":599,"z":37},{"x":-2057,"y":545,"z":36},{"x":-1877,"y":545,"z":32},{"x":-1877,"y":581,"z":32},{"x":-1829,"y":593,"z":32},{"x":-1757,"y":689,"z":32},{"x":-1799,"y":689,"z":33},{"x":-1913,"y":689,"z":36},{"x":-1919,"y":599,"z":32},{"x":-1877,"y":581,"z":32},{"x":-1715,"y":701,"z":32},{"x":-1787,"y":545,"z":32},{"x":-1781,"y":533,"z":32},{"x":-1547,"y":533,"z":33},{"x":-1541,"y":545,"z":32},{"x":-1613,"y":701,"z":32},{"x":-1409,"y":599,"z":33},{"`
++`x":-1415,"y":689,"z":37},{"x":-1571,"y":689,"z":32},{"x":-1409,"y":599,"z":33},{"x":-1571,"y":689,"z":32},{"x":-1613,"y":701,"z":32},{"x":-1541,"y":545,"z":32},{"x":-1319,"y":545,"z":36},{"x":-1613,"y":701,"z":32},{"x":-1613,"y":965,"z":32},{"x":-1715,"y":965,"z":34},{"x":-1715,"y":701,"z":32},{"x":-1985,"y":1205,"z":32},{"x":-1985,"y":1181,"z":32},{"x":-1973,"y":1181,"z":32},{"x":-1847,"y":1247,"z":32},{"x":-1847,"y":1265,"z":33},{"x":-1931,"y":1397,"z":31},{"x":-1733,"y":971,"z":36},{"x":-1733`
++`,"y":1001,"z":35},{"x":-1775,"y":1007,"z":39},{"x":-1847,"y":971,"z":40},{"x":-1721,"y":1301,"z":38},{"x":-1727,"y":1253,"z":33},{"x":-1667,"y":1271,"z":35},{"x":-1673,"y":1397,"z":42},{"x":-1805,"y":1325,"z":37},{"x":-1769,"y":1307,"z":38},{"x":-1721,"y":1301,"z":38},{"x":-1673,"y":1397,"z":42},{"x":-1931,"y":1397,"z":31},{"x":-1727,"y":1253,"z":33},{"x":-1787,"y":1253,"z":33},{"x":-1805,"y":1223,"z":32},{"x":-2039,"y":1277,"z":33},{"x":-2051,"y":1271,"z":33},{"x":-1985,"y":1205,"z":32},{"x":-1`
++`949,"y":1049,"z":34},{"x":-1943,"y":1031,"z":34},{"x":-1853,"y":1031,"z":37},{"x":-1775,"y":1049,"z":36},{"x":-1559,"y":1253,"z":37},{"x":-1565,"y":1271,"z":38},{"x":-1667,"y":1271,"z":35},{"x":-1931,"y":1397,"z":31},{"x":-1937,"y":1433,"z":32},{"x":-2033,"y":1433,"z":33},{"x":-2039,"y":1277,"z":33},{"x":-1985,"y":1205,"z":32},{"x":-1994,"y":1358,"z":27},{"x":-1853,"y":1031,"z":37},{"x":-1847,"y":971,"z":40},{"x":-1775,"y":1007,"z":39},{"x":-1775,"y":1049,"z":36},{"x":-1973,"y":1181,"z":32},{"x"`
++`:-1973,"y":1049,"z":34},{"x":-1949,"y":1049,"z":34},{"x":-1667,"y":1271,"z":35},{"x":-1727,"y":1253,"z":33},{"x":-1805,"y":1223,"z":32},{"x":-1727,"y":1055,"z":32},{"x":-1721,"y":1043,"z":32},{"x":-1565,"y":1043,"z":35},{"x":-1727,"y":1055,"z":32},{"x":-1565,"y":1043,"z":35},{"x":-1523,"y":1049,"z":36},{"x":-1559,"y":1253,"z":37},{"x":-1667,"y":1271,"z":35},{"x":-1805,"y":1223,"z":32},{"x":-1973,"y":1181,"z":32},{"x":-1949,"y":1049,"z":34},{"x":-1775,"y":1049,"z":36},{"x":-1727,"y":1055,"z":32},`
++`{"x":-1805,"y":1223,"z":32},{"x":-1847,"y":1247,"z":32},{"x":-1523,"y":1049,"z":36},{"x":-1523,"y":1253,"z":38},{"x":-1559,"y":1253,"z":37},{"x":-1847,"y":1265,"z":33},{"x":-1805,"y":1325,"z":37},{"x":-1931,"y":1397,"z":31},{"x":-1853,"y":-25,"z":0},{"x":-1793,"y":-85,"z":8},{"x":-1793,"y":143,"z":0},{"x":-2039,"y":143,"z":8},{"x":-2033,"y":-25,"z":9},{"x":-1853,"y":-25,"z":0},{"x":-1793,"y":143,"z":0},{"x":-1958,"y":-16,"z":0},{"x":-2033,"y":1793,"z":32},{"x":-2033,"y":1433,"z":33},{"x":-1937,"`
++`y":1433,"z":33},{"x":-1937,"y":1793,"z":32},{"x":-1859,"y":-937,"z":154},{"x":-1859,"y":-871,"z":153},{"x":-1877,"y":-865,"z":156},{"x":-1911.67,"y":-866.33,"z":166},{"x":-1929,"y":-867,"z":181},{"x":-1946.33,"y":-867.67,"z":182},{"x":-1998.33,"y":-869.67,"z":182},{"x":-2033,"y":-871,"z":160},{"x":-2033,"y":-937,"z":161},{"x":-1998.2,"y":-937,"z":183},{"x":-1946,"y":-937,"z":183},{"x":-1893.8,"y":-937,"z":159},{"x":-1898,"y":-874,"z":158},{"x":-2006,"y":-910,"z":183},{"x":-2003,"y":3053,"z":72},`
++`{"x":-2003,"y":3017,"z":70},{"x":-1937,"y":3017,"z":71},{"x":-1937,"y":3053,"z":72},{"x":-1925,"y":3053,"z":106},{"x":-1925,"y":3023,"z":106},{"x":-1895,"y":3023,"z":106},{"x":-1895,"y":3053,"z":106},{"x":-1859,"y":539,"z":106},{"x":-1847,"y":539,"z":106},{"x":-1823,"y":545,"z":106},{"x":-1829,"y":581,"z":106},{"x":-1865,"y":575,"z":106},{"x":-1847,"y":-943,"z":120},{"x":-1859,"y":-949,"z":120},{"x":-1850,"y":-959.5,"z":128},{"x":-1823,"y":-991,"z":129},{"x":-1823,"y":-991,"z":129},{"x":-1823,"y`
++`":-1045,"z":128},{"x":-1799,"y":-1051,"z":129},{"x":-1847,"y":-871,"z":117},{"x":-1847,"y":-943,"z":120},{"x":-1823,"y":-991,"z":129},{"x":-1814,"y":-940.6,"z":120},{"x":-1793,"y":-823,"z":116},{"x":-1769,"y":-655,"z":129},{"x":-1787,"y":-655,"z":129},{"x":-1793,"y":-823,"z":116},{"x":-1619,"y":-823,"z":116},{"x":-1619,"y":-805,"z":116},{"x":-1799,"y":-1051,"z":129},{"x":-1799,"y":-1075,"z":129},{"x":-1607,"y":-1075,"z":128},{"x":-1793,"y":-823,"z":116},{"x":-1814,"y":-940.6,"z":120},{"x":-1823,`
++`"y":-991,"z":129},{"x":-1799,"y":-1051,"z":129},{"x":-1607,"y":-1075,"z":128},{"x":-1607,"y":-823,"z":116},{"x":-1619,"y":-823,"z":116},{"x":-1814,"y":-958,"z":128},{"x":-1724,"y":-1012,"z":121},{"x":-1763,"y":2327,"z":103},{"x":-1763,"y":2423,"z":102},{"x":-1853,"y":2423,"z":103},{"x":-1859,"y":2327,"z":103},{"x":-1745,"y":2459,"z":65},{"x":-1859,"y":2459,"z":65},{"x":-1859,"y":2441,"z":63},{"x":-1721,"y":2429,"z":63},{"x":-1721,"y":2873,"z":63},{"x":-1745,"y":2873,"z":63},{"x":-1745,"y":2459,"`
++`z":65},{"x":-1721,"y":2429,"z":63},{"x":-1853,"y":2651,"z":78},{"x":-1853,"y":2627,"z":78},{"x":-1835,"y":2627,"z":78},{"x":-1835,"y":2651,"z":78},{"x":-1775,"y":1289,"z":71},{"x":-1793,"y":1313,"z":70},{"x":-1805,"y":1313,"z":71},{"x":-1835,"y":1259,"z":71},{"x":-1805,"y":1235,"z":70},{"x":-1829,"y":2675,"z":77},{"x":-1829,"y":2657,"z":77},{"x":-1805,"y":2657,"z":77},{"x":-1805,"y":2675,"z":77},{"x":-1679,"y":-193,"z":164},{"x":-1667,"y":-157,"z":157},{"x":-1673,"y":-169,"z":164},{"x":-1691,"y"`
++`:-187,"z":164},{"x":-1679,"y":-193,"z":164},{"x":-1673,"y":-169,"z":164},{"x":-1697,"y":-163,"z":164},{"x":-1697,"y":-229,"z":164},{"x":-1691,"y":-187,"z":164},{"x":-1697,"y":-163,"z":164},{"x":-1769,"y":-235,"z":158},{"x":-1679,"y":-235,"z":164},{"x":-1625,"y":-229,"z":164},{"x":-1613,"y":-223,"z":164},{"x":-1613,"y":-151,"z":164},{"x":-1640,"y":-154,"z":157},{"x":-1653.5,"y":-155.5,"z":164},{"x":-1667,"y":-157,"z":157},{"x":-1679,"y":-193,"z":164},{"x":-1691,"y":-151,"z":157},{"x":-1667,"y":-1`
++`57,"z":157},{"x":-1653.5,"y":-155.5,"z":164},{"x":-1640,"y":-154,"z":157},{"x":-1613,"y":-151,"z":164},{"x":-1628.6,"y":-151,"z":157},{"x":-1691,"y":-313,"z":164},{"x":-1691,"y":-247,"z":164},{"x":-1748.6,"y":-247,"z":164},{"x":-1763,"y":-247,"z":157},{"x":-1769,"y":-319,"z":158},{"x":-1760,"y":-256,"z":164},{"x":-1769,"y":-235,"z":158},{"x":-1697,"y":-163,"z":164},{"x":-1691,"y":-151,"z":157},{"x":-1793,"y":-127,"z":158},{"x":-1766,"y":-226,"z":164},{"x":-1769,"y":-319,"z":158},{"x":-1763,"y":-`
++`247,"z":157},{"x":-1769,"y":-235,"z":158},{"x":-1613,"y":-151,"z":164},{"x":-1415,"y":-151,"z":159},{"x":-1415,"y":-127,"z":158},{"x":-1793,"y":-127,"z":158},{"x":-1691,"y":-151,"z":157},{"x":-1628.6,"y":-151,"z":157},{"x":-1793,"y":-127,"z":158},{"x":-1793,"y":-643,"z":158},{"x":-1769,"y":-643,"z":159},{"x":-1769,"y":-319,"z":158},{"x":-1769,"y":-235,"z":158},{"x":-1325,"y":41,"z":8},{"x":-1277,"y":41,"z":8},{"x":-1277,"y":53,"z":8},{"x":-1277,"y":239,"z":8},{"x":-1277,"y":281,"z":8},{"x":-1289`
++`,"y":293,"z":8},{"x":-1499,"y":-121,"z":8},{"x":-1487,"y":-103,"z":8},{"x":-1487,"y":-61,"z":8},{"x":-1697,"y":-103,"z":8},{"x":-1691,"y":-121,"z":8},{"x":-1439,"y":59,"z":8},{"x":-1421,"y":53,"z":8},{"x":-1385,"y":95,"z":3},{"x":-1289,"y":293,"z":8},{"x":-1325,"y":41,"z":8},{"x":-1277,"y":53,"z":8},{"x":-1253,"y":65,"z":8},{"x":-1277,"y":239,"z":8},{"x":-1289,"y":293,"z":8},{"x":-1367,"y":95,"z":8},{"x":-1487,"y":-61,"z":8},{"x":-1475,"y":-55,"z":8},{"x":-1469,"y":11,"z":8},{"x":-1549,"y":-27,"`
++`z":1},{"x":-1709,"y":-103,"z":8},{"x":-1697,"y":-103,"z":8},{"x":-1289,"y":347,"z":8},{"x":-1301,"y":413,"z":8},{"x":-1313,"y":425,"z":8},{"x":-1289,"y":293,"z":8},{"x":-1781,"y":509,"z":25},{"x":-1793,"y":497,"z":18},{"x":-1759.57,"y":463.57,"z":3},{"x":-1715,"y":419,"z":1},{"x":-1752.71,"y":470.43,"z":3},{"x":-1784,"y":500,"z":25},{"x":-1781,"y":533,"z":32},{"x":-1781,"y":509,"z":25},{"x":-1752.71,"y":470.43,"z":3},{"x":-1715,"y":419,"z":1},{"x":-1588.45,"y":475.73,"z":4},{"x":-1541,"y":497,"z`
++`":18},{"x":-1545,"y":521,"z":34},{"x":-1547,"y":533,"z":33},{"x":-1664,"y":464,"z":2},{"x":-1556,"y":518,"z":33},{"x":-1772,"y":500,"z":25},{"x":-1253,"y":65,"z":8},{"x":-1259,"y":179,"z":10},{"x":-1277,"y":239,"z":8},{"x":-1313,"y":425,"z":8},{"x":-1319,"y":503,"z":8},{"x":-1523.92,"y":497.46,"z":8},{"x":-1541,"y":497,"z":18},{"x":-1524.71,"y":491.86,"z":8},{"x":-1385,"y":95,"z":3},{"x":-1367,"y":95,"z":8},{"x":-1289,"y":293,"z":8},{"x":-1709,"y":-103,"z":8},{"x":-1597,"y":-49.8,"z":8},{"x":-15`
++`81,"y":-42.2,"z":1},{"x":-1469,"y":11,"z":8},{"x":-1439,"y":59,"z":8},{"x":-1589,"y":-31,"z":1},{"x":-1619,"y":-49,"z":8},{"x":-1289,"y":293,"z":8},{"x":-1313,"y":425,"z":8},{"x":-1524.71,"y":491.86,"z":8},{"x":-1541,"y":497,"z":18},{"x":-1588.45,"y":475.73,"z":4},{"x":-1715,"y":419,"z":1},{"x":-1709.8,"y":-33.4,"z":0},{"x":-1709.6,"y":-50.8,"z":8},{"x":-1709,"y":-103,"z":8},{"x":-1619,"y":-49,"z":8},{"x":-1604,"y":-40,"z":1},{"x":-1439,"y":59,"z":8},{"x":-1400,"y":410,"z":2},{"x":-1508,"y":50,"`
++`z":0},{"x":-1787,"y":2795,"z":77},{"x":-1787,"y":2771,"z":77},{"x":-1763,"y":2771,"z":77},{"x":-1763,"y":2795,"z":77},{"x":-1295,"y":2201,"z":1},{"x":-1283,"y":2207,"z":2},{"x":-1301,"y":2237,"z":1},{"x":-1619,"y":1607,"z":2},{"x":-1607,"y":1625,"z":2},{"x":-1607,"y":1655,"z":2},{"x":-1655,"y":1697,"z":2},{"x":-1721,"y":1607,"z":3},{"x":-1385,"y":2081,"z":3},{"x":-1355,"y":2087,"z":3},{"x":-1355,"y":2117,"z":2},{"x":-1355,"y":2201,"z":1},{"x":-1373,"y":2213,"z":0},{"x":-1295,"y":2201,"z":1},{"x"`
++`:-1301,"y":2237,"z":1},{"x":-1331,"y":2237,"z":1},{"x":-1355,"y":2201,"z":1},{"x":-1355,"y":2117,"z":2},{"x":-1325,"y":2129,"z":3},{"x":-1595,"y":1757,"z":1},{"x":-1577,"y":1733,"z":3},{"x":-1541,"y":1733,"z":1},{"x":-1691,"y":1859,"z":0},{"x":-1757,"y":1871,"z":0},{"x":-1775,"y":1859,"z":0},{"x":-1775,"y":1799,"z":3},{"x":-1721,"y":1793,"z":3},{"x":-1691,"y":1841,"z":1},{"x":-1349,"y":2261,"z":1},{"x":-1355,"y":2315,"z":1},{"x":-1385,"y":2327,"z":0},{"x":-1373,"y":2213,"z":0},{"x":-1673,"y":250`
++`1,"z":8},{"x":-1679,"y":2579,"z":6},{"x":-1709,"y":2579,"z":7},{"x":-1709,"y":2423,"z":10},{"x":-1709,"y":2423,"z":10},{"x":-1745,"y":2417,"z":13},{"x":-1745,"y":2321,"z":2},{"x":-1385,"y":1895,"z":6},{"x":-1493,"y":1901,"z":0},{"x":-1493,"y":1877,"z":0},{"x":-1469,"y":2573,"z":2},{"x":-1493,"y":2585,"z":3},{"x":-1589,"y":2579,"z":3},{"x":-1595,"y":2501,"z":2},{"x":-1385,"y":1895,"z":6},{"x":-1493,"y":1877,"z":0},{"x":-1505,"y":1865,"z":0},{"x":-1523,"y":1943,"z":0},{"x":-1493,"y":1901,"z":0},{"`
++`x":-1385,"y":1895,"z":6},{"x":-1385,"y":2081,"z":3},{"x":-1721,"y":1607,"z":3},{"x":-1655,"y":1697,"z":2},{"x":-1655,"y":1715,"z":2},{"x":-1721,"y":1793,"z":3},{"x":-1595,"y":2501,"z":2},{"x":-1673,"y":2501,"z":8},{"x":-1709,"y":2423,"z":10},{"x":-1385,"y":2387,"z":1},{"x":-1355,"y":2399,"z":3},{"x":-1355,"y":2573,"z":4},{"x":-1469,"y":2573,"z":2},{"x":-1721,"y":1793,"z":3},{"x":-1655,"y":1715,"z":2},{"x":-1613,"y":1757,"z":2},{"x":-1721,"y":1793,"z":3},{"x":-1613,"y":1757,"z":2},{"x":-1595,"y":`
++`1757,"z":1},{"x":-1649,"y":1787,"z":0},{"x":-1595,"y":2501,"z":2},{"x":-1709,"y":2423,"z":10},{"x":-1745,"y":2321,"z":2},{"x":-1385,"y":2327,"z":0},{"x":-1385,"y":2387,"z":1},{"x":-1469,"y":2573,"z":2},{"x":-1541,"y":1733,"z":1},{"x":-1385,"y":1895,"z":6},{"x":-1505,"y":1865,"z":0},{"x":-1649,"y":1787,"z":0},{"x":-1595,"y":1757,"z":1},{"x":-1721,"y":1793,"z":3},{"x":-1649,"y":1787,"z":0},{"x":-1691,"y":1841,"z":1},{"x":-1757,"y":1871,"z":0},{"x":-1691,"y":1859,"z":0},{"x":-1661,"y":1883,"z":0},{`
++`"x":-1757,"y":1871,"z":0},{"x":-1661,"y":1883,"z":0},{"x":-1553,"y":1943,"z":-1},{"x":-1385,"y":2081,"z":3},{"x":-1373,"y":2213,"z":0},{"x":-1385,"y":2327,"z":0},{"x":-1553,"y":1943,"z":-1},{"x":-1523,"y":1943,"z":0},{"x":-1385,"y":2081,"z":3},{"x":-1757,"y":2315,"z":2},{"x":-1757,"y":2119.64,"z":-5},{"x":-1757,"y":1871,"z":0},{"x":-1553,"y":1943,"z":-1},{"x":-1385,"y":2081,"z":3},{"x":-1385,"y":2327,"z":0},{"x":-1745,"y":2321,"z":2},{"x":-1586,"y":2132,"z":-8},{"x":-1619,"y":-805,"z":116},{"x":`
++`-1619,"y":-823,"z":116},{"x":-1607,"y":-823,"z":116},{"x":-1277,"y":-277,"z":128},{"x":-1271,"y":-265,"z":156},{"x":-1265,"y":-253,"z":162},{"x":-1295,"y":-253,"z":162},{"x":-1292,"y":-265,"z":155},{"x":-1289,"y":-277,"z":128},{"x":-995,"y":-1015,"z":128},{"x":-1013,"y":-997,"z":128},{"x":-1031,"y":-991,"z":128},{"x":-1025,"y":-1063,"z":128},{"x":-995,"y":-1063,"z":128},{"x":-1559,"y":-223,"z":129},{"x":-1571,"y":-199,"z":130},{"x":-1601,"y":-199,"z":130},{"x":-1607,"y":-235,"z":129},{"x":-1289,`
++`"y":-277,"z":128},{"x":-1307,"y":-265,"z":128},{"x":-1349,"y":-265,"z":130},{"x":-1541,"y":-223,"z":129},{"x":-1559,"y":-223,"z":129},{"x":-1607,"y":-235,"z":129},{"x":-1679,"y":-319,"z":128},{"x":-1109,"y":-223,"z":129},{"x":-1145,"y":-223,"z":128},{"x":-1151,"y":-265,"z":128},{"x":-1187,"y":-265,"z":128},{"x":-1193,"y":-253,"z":129},{"x":-1253,"y":-253,"z":129},{"x":-1259,"y":-277,"z":128},{"x":-1091,"y":-211,"z":130},{"x":-1109,"y":-223,"z":129},{"x":-1151,"y":-265,"z":128},{"x":-995,"y":-283`
++`,"z":129},{"x":-995,"y":-217,"z":129},{"x":-1013,"y":-199,"z":128},{"x":-1031,"y":-1075,"z":128},{"x":-1025,"y":-1063,"z":128},{"x":-1031,"y":-991,"z":128},{"x":-1007,"y":-967,"z":128},{"x":-1001,"y":-979,"z":128},{"x":-935,"y":-919,"z":120},{"x":-1013,"y":-199,"z":128},{"x":-1013,"y":-157,"z":135},{"x":-1085,"y":-169,"z":130},{"x":-1091,"y":-211,"z":130},{"x":-1028,"y":-184,"z":135},{"x":-1151,"y":-265,"z":128},{"x":-1187,"y":-265,"z":128},{"x":-1259,"y":-277,"z":128},{"x":-1055,"y":-415,"z":12`
++`9},{"x":-1019,"y":-403,"z":129},{"x":-995,"y":-283,"z":129},{"x":-1031,"y":-973,"z":128},{"x":-1007,"y":-967,"z":128},{"x":-935,"y":-919,"z":120},{"x":-971,"y":-709,"z":121},{"x":-982.14,"y":-697.86,"z":128},{"x":-1049,"y":-631,"z":127},{"x":-1037.3,"y":-853.3,"z":116},{"x":-1031.9,"y":-955.9,"z":121},{"x":-968,"y":-784,"z":116},{"x":-1607,"y":-235,"z":129},{"x":-1679,"y":-247,"z":128},{"x":-1679,"y":-319,"z":128},{"x":-971,"y":-709,"z":121},{"x":-971,"y":-693.4,"z":128},{"x":-971,"y":-631,"z":1`
++`28},{"x":-1049,"y":-631,"z":127},{"x":-982.14,"y":-697.86,"z":128},{"x":-971,"y":-409,"z":128},{"x":-977,"y":-289,"z":130},{"x":-995,"y":-283,"z":129},{"x":-1019,"y":-403,"z":129},{"x":-1415,"y":-199,"z":128},{"x":-1415,"y":-163,"z":130},{"x":-1529,"y":-163,"z":131},{"x":-1529,"y":-211,"z":129},{"x":-1415,"y":-199,"z":128},{"x":-1529,"y":-211,"z":129},{"x":-1541,"y":-223,"z":129},{"x":-1349,"y":-265,"z":130},{"x":-1415,"y":-199,"z":128},{"x":-1541,"y":-223,"z":129},{"x":-1679,"y":-319,"z":128},{`
++`"x":-1757,"y":-649,"z":129},{"x":-1769,"y":-655,"z":129},{"x":-1619,"y":-805,"z":116},{"x":-935,"y":-919,"z":120},{"x":-929,"y":-715,"z":121},{"x":-971,"y":-709,"z":121},{"x":-1055,"y":-415,"z":129},{"x":-1259,"y":-277,"z":128},{"x":-1277,"y":-277,"z":128},{"x":-1289,"y":-277,"z":128},{"x":-1055,"y":-415,"z":129},{"x":-1289,"y":-277,"z":128},{"x":-1349,"y":-265,"z":130},{"x":-1031,"y":-991,"z":128},{"x":-1031,"y":-973,"z":128},{"x":-1031.9,"y":-955.9,"z":121},{"x":-1037.3,"y":-853.3,"z":116},{"x`
++`":-1049,"y":-631,"z":127},{"x":-1037.86,"y":-853.86,"z":116},{"x":-1679,"y":-319,"z":128},{"x":-1757,"y":-325,"z":129},{"x":-1757,"y":-649,"z":129},{"x":-1619,"y":-805,"z":116},{"x":-1646.86,"y":-579.36,"z":133},{"x":-1031,"y":-991,"z":128},{"x":-1037.86,"y":-853.86,"z":116},{"x":-1049,"y":-631,"z":127},{"x":-1061,"y":-595,"z":128},{"x":-1607,"y":-823,"z":116},{"x":-1607,"y":-1075,"z":128},{"x":-1031,"y":-1075,"z":128},{"x":-1058,"y":-796,"z":116},{"x":-1061,"y":-595,"z":128},{"x":-1055,"y":-415`
++`,"z":129},{"x":-1349,"y":-265,"z":130},{"x":-1679,"y":-319,"z":128},{"x":-1646.86,"y":-579.36,"z":133},{"x":-1619,"y":-805,"z":116},{"x":-1607,"y":-823,"z":116},{"x":-1634,"y":-580,"z":132},{"x":-1709,"y":2579,"z":7},{"x":-1679,"y":2579,"z":6},{"x":-1667,"y":2591,"z":5},{"x":-1415,"y":2741,"z":15},{"x":-1355,"y":2747,"z":17},{"x":-1355,"y":2777,"z":15},{"x":-1505,"y":2867,"z":6},{"x":-1535,"y":2777,"z":7},{"x":-1541,"y":2741,"z":7},{"x":-1595,"y":2591,"z":3},{"x":-1589,"y":2579,"z":3},{"x":-1493`
++`,"y":2585,"z":3},{"x":-1493,"y":2657,"z":5},{"x":-1475,"y":2669,"z":5},{"x":-1421,"y":2669,"z":13},{"x":-1415,"y":2741,"z":15},{"x":-1493,"y":2657,"z":5},{"x":-1475,"y":2669,"z":5},{"x":-1415,"y":2741,"z":15},{"x":-1541,"y":2741,"z":7},{"x":-1565,"y":2705,"z":6},{"x":-1601,"y":2807,"z":11},{"x":-1535,"y":2777,"z":7},{"x":-1505,"y":2867,"z":6},{"x":-1709,"y":2867,"z":19},{"x":-1667,"y":2591,"z":5},{"x":-1595,"y":2591,"z":3},{"x":-1493,"y":2657,"z":5},{"x":-1493,"y":2657,"z":5},{"x":-1565,"y":2705`
++`,"z":6},{"x":-1631,"y":2729,"z":9},{"x":-1709,"y":2579,"z":7},{"x":-1667,"y":2591,"z":5},{"x":-1625,"y":2777,"z":11},{"x":-1601,"y":2807,"z":11},{"x":-1709,"y":2867,"z":19},{"x":-1631,"y":2729,"z":9},{"x":-1625,"y":2777,"z":11},{"x":-1709,"y":2867,"z":19},{"x":-1709,"y":2579,"z":7},{"x":-1619,"y":1877,"z":54},{"x":-1637,"y":1883,"z":46},{"x":-1637,"y":1874,"z":53},{"x":-1637,"y":1865,"z":34},{"x":-1628,"y":1859,"z":54},{"x":-1619,"y":1853,"z":55},{"x":-1625,"y":1829,"z":35},{"x":-1637,"y":1857,"`
++`z":34},{"x":-1643,"y":1871,"z":43},{"x":-1667,"y":1865,"z":36},{"x":-1679,"y":1847,"z":37},{"x":-1655,"y":1805,"z":37},{"x":-1619,"y":1811,"z":35},{"x":-1583,"y":1901,"z":52},{"x":-1595,"y":1901,"z":53},{"x":-1607,"y":1901,"z":41},{"x":-1613,"y":1889,"z":54},{"x":-1619,"y":1877,"z":54},{"x":-1589,"y":1847,"z":54},{"x":-1559,"y":1859,"z":52},{"x":-1619,"y":1877,"z":54},{"x":-1619,"y":1853,"z":55},{"x":-1613,"y":1829,"z":48},{"x":-1589,"y":1847,"z":54},{"x":-1619,"y":1811,"z":35},{"x":-1609,"y":18`
++`23,"z":49},{"x":-1589,"y":1847,"z":54},{"x":-1613,"y":1829,"z":48},{"x":-1619,"y":1811,"z":35},{"x":-1613,"y":1829,"z":48},{"x":-1625,"y":1829,"z":35},{"x":-1535,"y":1703,"z":234},{"x":-1565,"y":1745,"z":232},{"x":-1583,"y":1745,"z":231},{"x":-1643,"y":1607,"z":233},{"x":-1367,"y":1763,"z":245},{"x":-1355,"y":1763,"z":232},{"x":-1355,"y":1853,"z":232},{"x":-1373,"y":1853,"z":232},{"x":-1368,"y":1778,"z":232},{"x":-1367,"y":1751,"z":251},{"x":-1367,"y":1763,"z":245},{"x":-1368,"y":1778,"z":232},{`
++`"x":-1373,"y":1853,"z":232},{"x":-1376.33,"y":1766.33,"z":232},{"x":-1377,"y":1749,"z":251},{"x":-1378.33,"y":1714.33,"z":232},{"x":-1379,"y":1697,"z":231},{"x":-1373,"y":1724,"z":232},{"x":-1370,"y":1737.5,"z":251},{"x":-1355,"y":1637,"z":232},{"x":-1355,"y":1718.43,"z":232},{"x":-1355,"y":1751,"z":260},{"x":-1367,"y":1751,"z":251},{"x":-1370,"y":1737.5,"z":251},{"x":-1373,"y":1724,"z":232},{"x":-1379,"y":1697,"z":231},{"x":-1385,"y":1631,"z":231},{"x":-1385,"y":1631,"z":231},{"x":-1379,"y":169`
++`7,"z":231},{"x":-1535,"y":1703,"z":234},{"x":-1385,"y":1607,"z":231},{"x":-1385,"y":1631,"z":231},{"x":-1535,"y":1703,"z":234},{"x":-1643,"y":1607,"z":233},{"x":-1613,"y":1679,"z":61},{"x":-1613,"y":1667,"z":59},{"x":-1595,"y":1667,"z":60},{"x":-1643,"y":1703,"z":60},{"x":-1613,"y":1679,"z":61},{"x":-1595,"y":1667,"z":60},{"x":-1565,"y":1703,"z":60},{"x":-1595,"y":1745,"z":60},{"x":-1613,"y":1745,"z":60},{"x":-1619,"y":2741,"z":65},{"x":-1583,"y":2717,"z":65},{"x":-1565,"y":2717,"z":65},{"x":-15`
++`47,"y":2777,"z":64},{"x":-1589,"y":2795,"z":64},{"x":-1607,"y":2789,"z":64},{"x":-1571,"y":-181,"z":175},{"x":-1577,"y":-163,"z":174},{"x":-1595,"y":-163,"z":174},{"x":-1595,"y":-187,"z":175},{"x":-1553,"y":1931,"z":29},{"x":-1583,"y":1913,"z":41},{"x":-1571,"y":1907,"z":38},{"x":-1574,"y":1916,"z":32},{"x":-1523,"y":1931,"z":27},{"x":-1553,"y":1931,"z":29},{"x":-1571,"y":1907,"z":38},{"x":-1559,"y":1880,"z":33},{"x":-1553,"y":1866.5,"z":43},{"x":-1547,"y":1853,"z":42},{"x":-1505,"y":1877,"z":26`
++`},{"x":-1505,"y":1901,"z":27},{"x":-1544,"y":1862,"z":35},{"x":-1559,"y":-187,"z":175},{"x":-1559,"y":-211,"z":175},{"x":-1541,"y":-211,"z":175},{"x":-1541,"y":-187,"z":175},{"x":-1535,"y":533,"z":63},{"x":-1535,"y":515,"z":63},{"x":-1319,"y":515,"z":59},{"x":-1319,"y":533,"z":59},{"x":-1469,"y":1787,"z":169},{"x":-1529,"y":1721,"z":169},{"x":-1505,"y":1709,"z":170},{"x":-1385,"y":1709,"z":170},{"x":-1385,"y":1877,"z":169},{"x":-1469,"y":1799,"z":170},{"x":-1469,"y":1787,"z":169},{"x":-1385,"y":`
++`1709,"z":170},{"x":-1193,"y":1151,"z":32},{"x":-1163,"y":1169,"z":32},{"x":-1151,"y":1193,"z":32},{"x":-1205,"y":1193,"z":32},{"x":-1247,"y":1151,"z":32},{"x":-1331,"y":1169,"z":33},{"x":-1337,"y":1193,"z":33},{"x":-1379,"y":1199,"z":34},{"x":-1019,"y":1325,"z":-111},{"x":-1019,"y":1397,"z":-113},{"x":-1031,"y":1397,"z":-113},{"x":-1037,"y":1319,"z":-111},{"x":-1283,"y":1049,"z":32},{"x":-1277,"y":1031,"z":32},{"x":-1260.5,"y":1031,"z":32},{"x":-1244,"y":1031,"z":16},{"x":-1211,"y":1031,"z":8},{`
++`"x":-1127,"y":1055,"z":-24},{"x":-1161.67,"y":1053.67,"z":-16},{"x":-1265.67,"y":1049.67,"z":32},{"x":-1205,"y":1193,"z":32},{"x":-1283,"y":1193,"z":32},{"x":-1289,"y":1169,"z":32},{"x":-1247,"y":1151,"z":32},{"x":-1151,"y":1193,"z":32},{"x":-1151,"y":1277,"z":32},{"x":-1193,"y":1271,"z":32},{"x":-1205,"y":1193,"z":32},{"x":-1247,"y":1139,"z":24},{"x":-1247,"y":1151,"z":32},{"x":-1289,"y":1169,"z":32},{"x":-1331,"y":1169,"z":33},{"x":-1325,"y":1049,"z":38},{"x":-1258.14,"y":1126.14,"z":32},{"x":`
++`-1127,"y":1055,"z":-24},{"x":-1099,"y":1075,"z":-40},{"x":-1085,"y":1085,"z":-40},{"x":-1058,"y":1125.5,"z":-64},{"x":-1049,"y":1139,"z":-64},{"x":-1100,"y":1154,"z":-64},{"x":-1151,"y":1169,"z":-48},{"x":-1193,"y":1139,"z":-8},{"x":-1160,"y":1097,"z":-24},{"x":-1094,"y":1100,"z":-40},{"x":-1076,"y":1136,"z":-56},{"x":-1130,"y":1136,"z":-40},{"x":-1037,"y":1319,"z":-111},{"x":-1031,"y":1397,"z":-113},{"x":-1067,"y":1439,"z":-112},{"x":-1205,"y":1445,"z":-109},{"x":-1205,"y":1337,"z":-107},{"x":-`
++`1139,"y":1319,"z":-111},{"x":-1379,"y":1271,"z":36},{"x":-1511,"y":1271,"z":39},{"x":-1523,"y":1253,"z":38},{"x":-1379,"y":1199,"z":34},{"x":-1049,"y":1139,"z":-64},{"x":-1034.6,"y":1201.4,"z":-80},{"x":-1031,"y":1217,"z":-96},{"x":-1034,"y":1268,"z":-110},{"x":-1037,"y":1319,"z":-111},{"x":-1088,"y":1256,"z":-112},{"x":-1139,"y":1193,"z":-72},{"x":-1151,"y":1169,"z":-48},{"x":-1100,"y":1154,"z":-64},{"x":-1088,"y":1202,"z":-80},{"x":-1052,"y":1238,"z":-104},{"x":-1511,"y":1031,"z":37},{"x":-133`
++`1,"y":1031,"z":39},{"x":-1325,"y":1049,"z":38},{"x":-1247,"y":1139,"z":24},{"x":-1258.14,"y":1126.14,"z":32},{"x":-1325,"y":1049,"z":38},{"x":-1283,"y":1049,"z":32},{"x":-1265.67,"y":1049.67,"z":32},{"x":-1161.67,"y":1053.67,"z":-16},{"x":-1127,"y":1055,"z":-24},{"x":-1160,"y":1097,"z":-24},{"x":-1193,"y":1139,"z":-8},{"x":-1244,"y":1112,"z":16},{"x":-1154,"y":1076,"z":-16},{"x":-1244,"y":1058,"z":16},{"x":-1523,"y":1049,"z":36},{"x":-1511,"y":1031,"z":37},{"x":-1325,"y":1049,"z":38},{"x":-1331,`
++`"y":1169,"z":33},{"x":-1379,"y":1199,"z":34},{"x":-1523,"y":1253,"z":38},{"x":-1037,"y":1319,"z":-111},{"x":-1139,"y":1319,"z":-111},{"x":-1139,"y":1256,"z":-111},{"x":-1139,"y":1193,"z":-72},{"x":-1088,"y":1256,"z":-112},{"x":-1130,"y":1220,"z":-96},{"x":-1469,"y":2645,"z":60},{"x":-1457,"y":2657,"z":60},{"x":-1481,"y":2651,"z":60},{"x":-1481,"y":2591,"z":46},{"x":-1469,"y":2591,"z":59},{"x":-1469,"y":2645,"z":60},{"x":-1481,"y":2651,"z":60},{"x":-1481,"y":2621,"z":60},{"x":-1481,"y":2606,"z":4`
++`6},{"x":-1439,"y":-97,"z":70},{"x":-1445,"y":-106,"z":90},{"x":-1451,"y":-115,"z":90},{"x":-1433,"y":-115,"z":92},{"x":-1421,"y":-103,"z":89},{"x":-1424,"y":-91,"z":89},{"x":-1427,"y":-79,"z":68},{"x":-1397,"y":11,"z":61},{"x":-1409,"y":35,"z":61},{"x":-1421,"y":23,"z":67},{"x":-1415,"y":-1,"z":66},{"x":-1463,"y":-73,"z":69},{"x":-1457,"y":-97,"z":69},{"x":-1439,"y":-97,"z":70},{"x":-1427,"y":-79,"z":68},{"x":-1439,"y":-49,"z":70},{"x":-1463,"y":-55,"z":69},{"x":-1415,"y":-1,"z":66},{"x":-1421,"`
++`y":23,"z":67},{"x":-1451,"y":23,"z":69},{"x":-1463,"y":-37,"z":69},{"x":-1445,"y":-37,"z":69},{"x":-1439,"y":-49,"z":70},{"x":-1427,"y":-79,"z":68},{"x":-1415,"y":-91,"z":79},{"x":-1423,"y":-77,"z":68},{"x":-1445,"y":-37,"z":69},{"x":-1439,"y":-49,"z":70},{"x":-1423,"y":-77,"z":68},{"x":-1415,"y":-91,"z":79},{"x":-1415,"y":-76,"z":67},{"x":-1415,"y":-1,"z":66},{"x":-1235,"y":2711,"z":114},{"x":-1289,"y":2711,"z":120},{"x":-1295,"y":2699,"z":128},{"x":-1307,"y":2663,"z":128},{"x":-1289,"y":2645,"`
++`z":123},{"x":-1278.2,"y":2635.4,"z":102},{"x":-1235,"y":2597,"z":102},{"x":-1235,"y":2645.86,"z":102},{"x":-1235,"y":2662.14,"z":113},{"x":-1355,"y":2705,"z":124},{"x":-1355,"y":2723,"z":124},{"x":-1409,"y":2723,"z":125},{"x":-1409,"y":2639,"z":116},{"x":-1457,"y":2639,"z":107},{"x":-1457,"y":2597,"z":107},{"x":-1421,"y":2628.5,"z":108},{"x":-1331,"y":2663,"z":128},{"x":-1331,"y":2693,"z":128},{"x":-1355,"y":2705,"z":124},{"x":-1409,"y":2723,"z":125},{"x":-1409,"y":2672.6,"z":125},{"x":-1409,"y"`
++`:2639,"z":116},{"x":-1355,"y":2651,"z":119},{"x":-1289,"y":2645,"z":123},{"x":-1289,"y":2629,"z":102},{"x":-1289,"y":2597,"z":102},{"x":-1235,"y":2597,"z":102},{"x":-1278.2,"y":2635.4,"z":102},{"x":-1409,"y":2639,"z":116},{"x":-1421,"y":2628.5,"z":108},{"x":-1457,"y":2597,"z":107},{"x":-1355,"y":2585,"z":119},{"x":-1355,"y":2651,"z":119},{"x":-1412,"y":2630,"z":116},{"x":-1331,"y":2693,"z":128},{"x":-1331,"y":2663,"z":128},{"x":-1307,"y":2663,"z":128},{"x":-1295,"y":2699,"z":128},{"x":-1373,"y":`
++`1979,"z":232},{"x":-1373,"y":1895,"z":232},{"x":-1355,"y":1895,"z":232},{"x":-1355,"y":1979,"z":232},{"x":-1373,"y":2075,"z":232},{"x":-1373,"y":2021,"z":232},{"x":-1355,"y":2021,"z":232},{"x":-1343,"y":2081,"z":232},{"x":-1373,"y":2345,"z":45},{"x":-1373,"y":2327,"z":45},{"x":-1355,"y":2327,"z":44},{"x":-1355,"y":2345,"z":44},{"x":-1289,"y":1247,"z":70},{"x":-1319,"y":1253,"z":69},{"x":-1319,"y":1229,"z":69},{"x":-1295,"y":1181,"z":70},{"x":-1331,"y":1205,"z":70},{"x":-1325,"y":1181,"z":69},{"x`
++`":-1295,"y":1181,"z":70},{"x":-1319,"y":1229,"z":69},{"x":-1331,"y":1223,"z":70},{"x":-1331,"y":1223,"z":70},{"x":-1337,"y":1271,"z":71},{"x":-1367,"y":1271,"z":71},{"x":-1367,"y":1211,"z":70},{"x":-1331,"y":1205,"z":70},{"x":-1301,"y":2111,"z":232},{"x":-1301,"y":2201,"z":232},{"x":-1337,"y":2207,"z":232},{"x":-1343,"y":2111,"z":232},{"x":-1301,"y":2243,"z":232},{"x":-1301,"y":2321,"z":232},{"x":-1337,"y":2327,"z":232},{"x":-1343,"y":2237,"z":232},{"x":-1301,"y":2369,"z":230},{"x":-1301,"y":245`
++`3,"z":228},{"x":-1337,"y":2459,"z":228},{"x":-1343,"y":2369,"z":230},{"x":-1301,"y":2501,"z":227},{"x":-1301,"y":2579,"z":225},{"x":-1337,"y":2585,"z":225},{"x":-1343,"y":2495,"z":227},{"x":-1343,"y":2639,"z":224},{"x":-1343,"y":2621,"z":224},{"x":-1301,"y":2627,"z":224},{"x":-1301,"y":2645,"z":216},{"x":-1315,"y":2643,"z":224},{"x":-1307,"y":2087,"z":272},{"x":-1307,"y":2099,"z":273},{"x":-1316,"y":2102,"z":279},{"x":-1325,"y":2105,"z":271},{"x":-1331,"y":2081,"z":275},{"x":-1322,"y":2090,"z":2`
++`79},{"x":-1331,"y":2231,"z":275},{"x":-1331,"y":2213,"z":275},{"x":-1313,"y":2213,"z":279},{"x":-1313,"y":2231,"z":278},{"x":-821,"y":2483,"z":-65},{"x":-821,"y":2513,"z":-65},{"x":-839,"y":2495,"z":-64},{"x":-839,"y":2477,"z":-54},{"x":-836,"y":2447,"z":-53},{"x":-833,"y":2417,"z":-65},{"x":-827,"y":2450,"z":-54},{"x":-830,"y":2462,"z":-64},{"x":-875,"y":2549,"z":-48},{"x":-887,"y":2561,"z":-55},{"x":-905,"y":2561,"z":-47},{"x":-875,"y":2525,"z":-41},{"x":-923,"y":2423,"z":-43},{"x":-911,"y":24`
++`20,"z":-42},{"x":-899,"y":2417,"z":-54},{"x":-887,"y":2417,"z":-54},{"x":-878,"y":2417,"z":-54},{"x":-869,"y":2417,"z":-65},{"x":-909.5,"y":2421.5,"z":-42},{"x":-851,"y":2495,"z":-42},{"x":-839,"y":2495,"z":-64},{"x":-821,"y":2513,"z":-65},{"x":-827,"y":2555,"z":-64},{"x":-845,"y":2555,"z":-64},{"x":-853,"y":2531,"z":-64},{"x":-857,"y":2519,"z":-41},{"x":-854,"y":2507,"z":-52},{"x":-848,"y":2522,"z":-53},{"x":-1301,"y":2237,"z":1},{"x":-1283,"y":2207,"z":3},{"x":-1265,"y":2195,"z":3},{"x":-845,"`
++`y":2555,"z":-64},{"x":-851,"y":2579,"z":-71},{"x":-852.5,"y":2564,"z":-74},{"x":-855.5,"y":2534,"z":-64},{"x":-857,"y":2519,"z":-41},{"x":-853,"y":2531,"z":-64},{"x":-851,"y":2495,"z":-42},{"x":-854,"y":2507,"z":-52},{"x":-857,"y":2519,"z":-41},{"x":-875,"y":2525,"z":-41},{"x":-851,"y":2477,"z":-42},{"x":-851,"y":2495,"z":-42},{"x":-875,"y":2525,"z":-41},{"x":-905,"y":2561,"z":-47},{"x":-905,"y":2545,"z":-53},{"x":-905,"y":2529,"z":-42},{"x":-905,"y":2465,"z":-41},{"x":-1229,"y":2087,"z":12},{"x`
++`":-1223,"y":2057,"z":14},{"x":-1181,"y":2063,"z":9},{"x":-1169,"y":2135,"z":4},{"x":-1049,"y":2561,"z":16},{"x":-1055,"y":2573,"z":23},{"x":-1109,"y":2579,"z":43},{"x":-1223,"y":2591,"z":65},{"x":-1289,"y":2585,"z":67},{"x":-1151.86,"y":2571.29,"z":49},{"x":-1100.43,"y":2566.14,"z":38},{"x":-1313,"y":2285,"z":3},{"x":-1331,"y":2237,"z":1},{"x":-1301,"y":2237,"z":1},{"x":-959,"y":2369,"z":-51},{"x":-917,"y":2411,"z":-57},{"x":-923,"y":2423,"z":-43},{"x":-932,"y":2409.5,"z":-52},{"x":-1169,"y":213`
++`5,"z":4},{"x":-1121,"y":2135,"z":-1},{"x":-1115,"y":2165,"z":-3},{"x":-1283,"y":2297,"z":5},{"x":-1313,"y":2285,"z":3},{"x":-1301,"y":2237,"z":1},{"x":-1265,"y":2195,"z":3},{"x":-1169,"y":2135,"z":4},{"x":-1115,"y":2165,"z":-3},{"x":-869,"y":2417,"z":-65},{"x":-833,"y":2417,"z":-65},{"x":-836,"y":2447,"z":-53},{"x":-839,"y":2477,"z":-54},{"x":-851,"y":2477,"z":-42},{"x":-905,"y":2465,"z":-41},{"x":-923,"y":2423,"z":-43},{"x":-909.5,"y":2421.5,"z":-42},{"x":-878,"y":2444,"z":-41},{"x":-917,"y":24`
++`65,"z":-36},{"x":-917,"y":2481.5,"z":-25},{"x":-917,"y":2531,"z":-25},{"x":-929,"y":2537,"z":-25},{"x":-946.14,"y":2540.43,"z":-27},{"x":-1049,"y":2561,"z":16},{"x":-959,"y":2369,"z":-51},{"x":-932,"y":2409.5,"z":-52},{"x":-923,"y":2423,"z":-43},{"x":-968,"y":2504,"z":-29},{"x":-950,"y":2450,"z":-36},{"x":-1289,"y":2153,"z":4},{"x":-1283,"y":2087,"z":10},{"x":-1229,"y":2087,"z":12},{"x":-1169,"y":2135,"z":4},{"x":-1265,"y":2195,"z":3},{"x":-923,"y":2423,"z":-43},{"x":-905,"y":2465,"z":-41},{"x":`
++`-917,"y":2465,"z":-36},{"x":-929,"y":2537,"z":-25},{"x":-929,"y":2549,"z":-33},{"x":-929,"y":2561,"z":-30},{"x":-980.43,"y":2561,"z":-5},{"x":-1049,"y":2561,"z":16},{"x":-946.14,"y":2540.43,"z":-27},{"x":-1073,"y":2165,"z":-15},{"x":-1067,"y":2153,"z":-17},{"x":-965,"y":2249,"z":-63},{"x":-1115,"y":2165,"z":-3},{"x":-1073,"y":2165,"z":-15},{"x":-965,"y":2249,"z":-63},{"x":-1109,"y":2711,"z":89},{"x":-1223,"y":2711,"z":88},{"x":-1223,"y":2591,"z":65},{"x":-1109,"y":2579,"z":43},{"x":-1178,"y":264`
++`2,"z":70},{"x":-1115,"y":2165,"z":-3},{"x":-965,"y":2249,"z":-63},{"x":-959,"y":2369,"z":-51},{"x":-1049,"y":2561,"z":16},{"x":-1100.43,"y":2566.14,"z":38},{"x":-1151.86,"y":2571.29,"z":49},{"x":-1289,"y":2585,"z":67},{"x":-1283,"y":2297,"z":5},{"x":-1118,"y":2336,"z":1},{"x":-1190,"y":2408,"z":26},{"x":-1154,"y":2426,"z":26},{"x":-1331,"y":2357,"z":267},{"x":-1331,"y":2333,"z":270},{"x":-1313,"y":2339,"z":275},{"x":-1307,"y":2357,"z":267},{"x":-1331,"y":2489,"z":249},{"x":-1331,"y":2477,"z":260`
++`},{"x":-1331,"y":2465,"z":260},{"x":-1307,"y":2465,"z":251},{"x":-1307,"y":2489,"z":249},{"x":-1331,"y":2615,"z":267},{"x":-1331,"y":2597,"z":267},{"x":-1313,"y":2597,"z":271},{"x":-1313,"y":2615,"z":267},{"x":-1235,"y":2057,"z":232},{"x":-1235,"y":2075,"z":232},{"x":-1247,"y":2081,"z":232},{"x":-1301,"y":2081,"z":232},{"x":-1301,"y":2057,"z":232},{"x":-1271,"y":1271,"z":104},{"x":-1277,"y":1217,"z":104},{"x":-1271,"y":1205,"z":104},{"x":-1211,"y":1205,"z":104},{"x":-1205,"y":1271,"z":104},{"x":`
++`-1121,"y":1529,"z":-76},{"x":-1139,"y":1505,"z":-77},{"x":-1127,"y":1499,"z":-76},{"x":-1061,"y":1517,"z":-76},{"x":-1061,"y":1517,"z":-76},{"x":-1127,"y":1499,"z":-76},{"x":-1133,"y":1487,"z":-76},{"x":-1067,"y":1451,"z":-76},{"x":-1139,"y":1505,"z":-77},{"x":-1121,"y":1529,"z":-76},{"x":-1205,"y":1517,"z":-77},{"x":-1145,"y":1493,"z":-77},{"x":-1139,"y":1505,"z":-77},{"x":-1205,"y":1517,"z":-77},{"x":-1133,"y":1487,"z":-76},{"x":-1145,"y":1493,"z":-77},{"x":-1205,"y":1517,"z":-77},{"x":-1205,"`
++`y":1463,"z":-77},{"x":-1067,"y":1451,"z":-76},{"x":-1139,"y":2057,"z":40},{"x":-1139,"y":2123,"z":39},{"x":-1163,"y":2123,"z":40},{"x":-1175,"y":2057,"z":40},{"x":-1127,"y":2117,"z":65},{"x":-1127,"y":2057,"z":64},{"x":-1061,"y":2057,"z":64},{"x":-1055,"y":2117,"z":65},{"x":-1109,"y":2153,"z":43},{"x":-1109,"y":2129,"z":43},{"x":-1079,"y":2129,"z":43},{"x":-1079,"y":2153,"z":43},{"x":-1097,"y":2591,"z":139},{"x":-1091,"y":2579,"z":139},{"x":-1061,"y":2585,"z":138},{"x":-1061,"y":2711,"z":139},{"`
++`x":-1097,"y":2711,"z":139},{"x":-779,"y":1391,"z":-112},{"x":-773,"y":1379,"z":-112},{"x":-731,"y":1415,"z":-113},{"x":-1055,"y":1445,"z":-113},{"x":-1067,"y":1439,"z":-112},{"x":-1031,"y":1397,"z":-113},{"x":-1055,"y":1445,"z":-113},{"x":-1031,"y":1397,"z":-113},{"x":-1019,"y":1397,"z":-113},{"x":-1049,"y":1529,"z":-109},{"x":-899,"y":1331,"z":-108},{"x":-863,"y":1331,"z":-110},{"x":-857,"y":1391,"z":-112},{"x":-1019,"y":1325,"z":-111},{"x":-905,"y":1319,"z":-107},{"x":-899,"y":1331,"z":-108},{`
++`"x":-1019,"y":1397,"z":-113},{"x":-857,"y":1391,"z":-112},{"x":-779,"y":1391,"z":-112},{"x":-731,"y":1415,"z":-113},{"x":-857,"y":1517,"z":-110},{"x":-899,"y":1517,"z":-110},{"x":-725,"y":1529,"z":-108},{"x":-851,"y":1529,"z":-108},{"x":-857,"y":1517,"z":-110},{"x":-731,"y":1415,"z":-113},{"x":-899,"y":1517,"z":-110},{"x":-905,"y":1529,"z":-109},{"x":-1049,"y":1529,"z":-109},{"x":-1019,"y":1397,"z":-113},{"x":-899,"y":1331,"z":-108},{"x":-857,"y":1391,"z":-112},{"x":-887,"y":2417,"z":-67},{"x":-`
++`899,"y":2417,"z":-65},{"x":-917,"y":2411,"z":-59},{"x":-827,"y":2411,"z":-80},{"x":-833,"y":2417,"z":-78},{"x":-869,"y":2417,"z":-72},{"x":-887,"y":2417,"z":-67},{"x":-917,"y":2411,"z":-59},{"x":-959,"y":2369,"z":-52},{"x":-1067,"y":2153,"z":-16},{"x":-1067,"y":2129,"z":-11},{"x":-1043,"y":2117,"z":-11},{"x":-1008.33,"y":2175.67,"z":-46},{"x":-965,"y":2249,"z":-63},{"x":-887,"y":2093,"z":-80},{"x":-881,"y":2057,"z":-81},{"x":-815,"y":2057,"z":-103},{"x":-749,"y":2057,"z":-112},{"x":-743,"y":2093`
++`,"z":-113},{"x":-823,"y":2093,"z":-102},{"x":-1043,"y":2117,"z":-11},{"x":-1043,"y":2087,"z":-10},{"x":-973.67,"y":2089.67,"z":-49},{"x":-887,"y":2093,"z":-80},{"x":-926,"y":2171,"z":-77},{"x":-965,"y":2249,"z":-63},{"x":-1008.33,"y":2175.67,"z":-46},{"x":-980,"y":2204,"z":-62},{"x":-743,"y":2093,"z":-113},{"x":-707,"y":2093,"z":-115},{"x":-713,"y":2297,"z":-114},{"x":-827,"y":2411,"z":-80},{"x":-959,"y":2369,"z":-52},{"x":-965,"y":2249,"z":-63},{"x":-926,"y":2171,"z":-77},{"x":-887,"y":2093,"z"`
++`:-80},{"x":-823,"y":2093,"z":-102},{"x":-743,"y":2093,"z":-113},{"x":-713,"y":2297,"z":-114},{"x":-751,"y":2335,"z":-109},{"x":-812,"y":2192,"z":-109},{"x":-812,"y":2300,"z":-102},{"x":-740,"y":2156,"z":-118},{"x":-977,"y":-421,"z":166},{"x":-1001,"y":-415,"z":167},{"x":-1043,"y":-421,"z":165},{"x":-1044.8,"y":-471.4,"z":169},{"x":-1046,"y":-505,"z":190},{"x":-1047.8,"y":-555.4,"z":189},{"x":-1049,"y":-589,"z":168},{"x":-1043,"y":-619,"z":167},{"x":-977,"y":-613,"z":168},{"x":-977,"y":-543.18,"z`
++`":191},{"x":-977,"y":-490.82,"z":191},{"x":-977,"y":-473.36,"z":174},{"x":-1022,"y":-502,"z":196},{"x":-1040,"y":-592,"z":169},{"x":-1001,"y":-979,"z":128},{"x":-1013,"y":-997,"z":128},{"x":-995,"y":-1015,"z":128},{"x":-995,"y":-1015,"z":128},{"x":-995,"y":-1063,"z":128},{"x":-983,"y":-1075,"z":129},{"x":-1001,"y":-979,"z":128},{"x":-995,"y":-1015,"z":128},{"x":-983,"y":-1075,"z":129},{"x":-797,"y":-817,"z":116},{"x":-899,"y":-715,"z":121},{"x":-929,"y":-715,"z":121},{"x":-935,"y":-919,"z":120},`
++`{"x":-935,"y":-919,"z":120},{"x":-1001,"y":-979,"z":128},{"x":-983,"y":-1075,"z":129},{"x":-809,"y":-1075,"z":129},{"x":-791,"y":-1063,"z":128},{"x":-793.57,"y":-957.57,"z":128},{"x":-794,"y":-940,"z":121},{"x":-797,"y":-817,"z":116},{"x":-812,"y":-958,"z":128},{"x":-938,"y":-958,"z":128},{"x":-971,"y":-187,"z":140},{"x":-1001,"y":-193,"z":145},{"x":-983,"y":-205,"z":145},{"x":-419,"y":-1015,"z":106},{"x":-413,"y":-1063,"z":103},{"x":-317,"y":-1063,"z":81},{"x":-197,"y":-967,"z":51},{"x":-431,"y`
++`":-1069,"z":128},{"x":-431,"y":-1033,"z":128},{"x":-551,"y":-1033,"z":128},{"x":-581,"y":-1063,"z":128},{"x":-887,"y":-709,"z":121},{"x":-899,"y":-715,"z":121},{"x":-797,"y":-817,"z":116},{"x":-581,"y":-1063,"z":128},{"x":-551,"y":-1033,"z":128},{"x":-557,"y":-1021,"z":128},{"x":-797,"y":-817,"z":116},{"x":-794,"y":-940,"z":121},{"x":-793.57,"y":-957.57,"z":128},{"x":-791,"y":-1063,"z":128},{"x":-767,"y":-1063,"z":128},{"x":-317,"y":-1063,"z":81},{"x":-311,"y":-1075,"z":78},{"x":-197,"y":-967,"z`
++`":51},{"x":-767,"y":-1063,"z":128},{"x":-761,"y":-1075,"z":128},{"x":-587,"y":-1075,"z":128},{"x":-581,"y":-1063,"z":128},{"x":-887,"y":-649,"z":130},{"x":-887,"y":-709,"z":121},{"x":-797,"y":-817,"z":116},{"x":-557,"y":-1021,"z":128},{"x":-419,"y":-1015,"z":106},{"x":-197,"y":-967,"z":51},{"x":-197,"y":-878.67,"z":40},{"x":-197,"y":-649,"z":49},{"x":-497.77,"y":-649,"z":123},{"x":-887,"y":-649,"z":130},{"x":-797,"y":-817,"z":116},{"x":-536,"y":-868,"z":110},{"x":-626,"y":-706,"z":128},{"x":-482`
++`,"y":-958,"z":116},{"x":-230,"y":-778,"z":47},{"x":-857,"y":2633,"z":98},{"x":-857,"y":2597,"z":97},{"x":-743,"y":2597,"z":98},{"x":-743,"y":2633,"z":97},{"x":-737,"y":2567,"z":-82},{"x":-761,"y":2579,"z":-83},{"x":-815,"y":2579,"z":-82},{"x":-819.5,"y":2529.5,"z":-82},{"x":-821,"y":2513,"z":-74},{"x":-821,"y":2483,"z":-74},{"x":-785,"y":2519,"z":-83},{"x":-587,"y":2087,"z":-118},{"x":-581,"y":2075,"z":-118},{"x":-527,"y":2129,"z":-123},{"x":-815,"y":2417,"z":-83},{"x":-827,"y":2411,"z":-82},{"x`
++`":-713,"y":2297,"z":-114},{"x":-658.14,"y":2341.57,"z":-114},{"x":-521,"y":2453,"z":-88},{"x":-575,"y":2453,"z":-90},{"x":-712.14,"y":2432.43,"z":-98},{"x":-737,"y":2567,"z":-82},{"x":-785,"y":2519,"z":-83},{"x":-821,"y":2483,"z":-74},{"x":-815,"y":2417,"z":-83},{"x":-727.5,"y":2437,"z":-97},{"x":-605,"y":2465,"z":-87},{"x":-605,"y":2567,"z":-84},{"x":-722,"y":2480,"z":-85},{"x":-707,"y":2093,"z":-116},{"x":-587,"y":2087,"z":-118},{"x":-527,"y":2129,"z":-123},{"x":-523.84,"y":2299.53,"z":-116},{`
++`"x":-521,"y":2453,"z":-88},{"x":-658.14,"y":2341.57,"z":-114},{"x":-713,"y":2297,"z":-114},{"x":-711,"y":2229,"z":-120},{"x":-575,"y":2453,"z":-90},{"x":-605,"y":2465,"z":-87},{"x":-727.5,"y":2437,"z":-97},{"x":-815,"y":2417,"z":-83},{"x":-712.14,"y":2432.43,"z":-98},{"x":-503,"y":1373,"z":-112},{"x":-497,"y":1361,"z":-120},{"x":-467,"y":1391,"z":-126},{"x":-383,"y":1595,"z":-127},{"x":-413,"y":1583,"z":-126},{"x":-437,"y":1571,"z":-126},{"x":-365,"y":1481,"z":-126},{"x":-323,"y":1523,"z":-126},`
++`{"x":-335,"y":1613,"z":-128},{"x":-437,"y":1571,"z":-126},{"x":-461,"y":1589,"z":-125},{"x":-503,"y":1589,"z":-125},{"x":-335,"y":1613,"z":-128},{"x":-383,"y":1637,"z":-128},{"x":-383,"y":1595,"z":-127},{"x":-539,"y":1373,"z":-113},{"x":-503,"y":1373,"z":-112},{"x":-467,"y":1391,"z":-126},{"x":-503,"y":1475,"z":-112},{"x":-545,"y":1481,"z":-112},{"x":-500,"y":1418,"z":-112},{"x":-269,"y":1487,"z":-125},{"x":-269,"y":1523,"z":-125},{"x":-323,"y":1523,"z":-126},{"x":-365,"y":1481,"z":-126},{"x":-7`
++`31,"y":1415,"z":-113},{"x":-773,"y":1379,"z":-112},{"x":-773,"y":1319,"z":-112},{"x":-545,"y":1319,"z":-109},{"x":-539,"y":1373,"z":-113},{"x":-545,"y":1481,"z":-112},{"x":-437,"y":1571,"z":-126},{"x":-503,"y":1589,"z":-125},{"x":-503,"y":1523.86,"z":-125},{"x":-503,"y":1475,"z":-112},{"x":-467,"y":1391,"z":-126},{"x":-365,"y":1391,"z":-126},{"x":-365,"y":1481,"z":-126},{"x":-476,"y":1472,"z":-126},{"x":-545,"y":1481,"z":-112},{"x":-545,"y":1529,"z":-111},{"x":-725,"y":1529,"z":-108},{"x":-731,"`
++`y":1415,"z":-113},{"x":-755,"y":455,"z":24},{"x":-749,"y":431,"z":24},{"x":-725,"y":431,"z":24},{"x":-731,"y":467,"z":24},{"x":-695,"y":263,"z":8},{"x":-689,"y":245,"z":8},{"x":-659,"y":245,"z":8},{"x":-437,"y":-49,"z":-1},{"x":-431,"y":-61,"z":-1},{"x":-395,"y":-55,"z":-1},{"x":-395,"y":227,"z":0},{"x":-503,"y":197,"z":0},{"x":-731,"y":467,"z":24},{"x":-725,"y":431,"z":24},{"x":-713,"y":413,"z":16},{"x":-695.67,"y":413,"z":9},{"x":-557,"y":413,"z":6},{"x":-641,"y":503,"z":9},{"x":-725,"y":503,"`
++`z":10},{"x":-722,"y":458,"z":24},{"x":-719,"y":323,"z":9},{"x":-707,"y":263,"z":9},{"x":-695,"y":263,"z":8},{"x":-719,"y":323,"z":9},{"x":-695,"y":263,"z":8},{"x":-659,"y":245,"z":8},{"x":-707.6,"y":396.2,"z":9},{"x":-713,"y":413,"z":16},{"x":-714,"y":398,"z":9},{"x":-659,"y":245,"z":8},{"x":-647,"y":203,"z":8},{"x":-535,"y":198.33,"z":7},{"x":-503,"y":197,"z":0},{"x":-534.2,"y":206.6,"z":7},{"x":-395,"y":227,"z":0},{"x":-317,"y":299,"z":0},{"x":-419,"y":407,"z":-4},{"x":-557,"y":413,"z":6},{"x"`
++`:-695.67,"y":413,"z":9},{"x":-713,"y":413,"z":16},{"x":-707.6,"y":396.2,"z":9},{"x":-659,"y":245,"z":8},{"x":-534.2,"y":206.6,"z":7},{"x":-503,"y":197,"z":0},{"x":-395,"y":227,"z":0},{"x":-419,"y":407,"z":-4},{"x":-488,"y":224,"z":-2},{"x":-503,"y":197,"z":0},{"x":-503,"y":-49,"z":1},{"x":-437,"y":-49,"z":-1},{"x":-725,"y":2633,"z":39},{"x":-731,"y":2549,"z":41},{"x":-725,"y":2537,"z":41},{"x":-605,"y":2537,"z":40},{"x":-605,"y":2603,"z":39},{"x":-665,"y":2633,"z":39},{"x":-359,"y":2603,"z":19},`
++`{"x":-359,"y":2587,"z":27},{"x":-359,"y":2507,"z":26},{"x":-263,"y":2507,"z":26},{"x":-263,"y":2615,"z":25},{"x":-343,"y":2605,"z":27},{"x":-479,"y":2615,"z":26},{"x":-580.45,"y":2624.82,"z":27},{"x":-597.36,"y":2626.45,"z":40},{"x":-665,"y":2633,"z":39},{"x":-605,"y":2603,"z":39},{"x":-587.43,"y":2603,"z":26},{"x":-359,"y":2603,"z":19},{"x":-476,"y":2612,"z":20},{"x":-359,"y":2603,"z":19},{"x":-343,"y":2605,"z":27},{"x":-263,"y":2615,"z":25},{"x":-346.08,"y":2615,"z":27},{"x":-362.69,"y":2615,"`
++`z":19},{"x":-395.92,"y":2615,"z":19},{"x":-479,"y":2615,"z":26},{"x":-461.86,"y":2613.29,"z":20},{"x":-677,"y":203,"z":57},{"x":-659,"y":203,"z":56},{"x":-665,"y":233,"z":56},{"x":-689,"y":233,"z":57},{"x":-641,"y":623,"z":9},{"x":-641,"y":545,"z":9},{"x":-629,"y":539,"z":8},{"x":-629,"y":635,"z":8},{"x":-503,"y":719,"z":1},{"x":-533,"y":713,"z":8},{"x":-539,"y":635,"z":8},{"x":-257,"y":419,"z":-3},{"x":-245,"y":419,"z":-3},{"x":-239,"y":539,"z":-2},{"x":-251,"y":545,"z":-2},{"x":-629,"y":509,"z`
++`":9},{"x":-641,"y":503,"z":9},{"x":-557,"y":413,"z":6},{"x":-629,"y":539,"z":8},{"x":-629,"y":509,"z":9},{"x":-557,"y":413,"z":6},{"x":-539,"y":635,"z":8},{"x":-629,"y":635,"z":8},{"x":-257,"y":419,"z":-3},{"x":-251,"y":545,"z":-2},{"x":-251,"y":575,"z":0},{"x":-419,"y":407,"z":-4},{"x":-317,"y":299,"z":1},{"x":-317,"y":299,"z":1},{"x":-257,"y":293,"z":0},{"x":-257,"y":419,"z":-3},{"x":-227,"y":587,"z":0},{"x":-239,"y":743,"z":0},{"x":-257,"y":743,"z":0},{"x":-251,"y":575,"z":0},{"x":-227,"y":58`
++`7,"z":0},{"x":-257,"y":743,"z":0},{"x":-269,"y":767,"z":-1},{"x":-485,"y":893,"z":-29},{"x":-503,"y":875,"z":-22},{"x":-503,"y":771,"z":1},{"x":-503,"y":719,"z":1},{"x":-269,"y":767,"z":-1},{"x":-269,"y":798.5,"z":-1},{"x":-269,"y":893,"z":-24},{"x":-318.85,"y":893,"z":-24},{"x":-335.46,"y":893,"z":-32},{"x":-296,"y":800,"z":-1},{"x":-278,"y":836,"z":-16},{"x":-539,"y":635,"z":8},{"x":-557,"y":413,"z":6},{"x":-419,"y":407,"z":-4},{"x":-251,"y":575,"z":0},{"x":-269,"y":767,"z":-1},{"x":-503,"y":7`
++`19,"z":1},{"x":-458,"y":632,"z":-2},{"x":-587,"y":1793,"z":-118},{"x":-581,"y":1781,"z":-118},{"x":-551,"y":1811,"z":-120},{"x":-617,"y":1793,"z":-118},{"x":-587,"y":1793,"z":-118},{"x":-551,"y":1811,"z":-120},{"x":-581,"y":1925,"z":-118},{"x":-617,"y":1919,"z":-117},{"x":-575,"y":1973,"z":-118},{"x":-581,"y":1925,"z":-118},{"x":-551,"y":1811,"z":-120},{"x":-397.31,"y":1811,"z":-128},{"x":-329,"y":1811,"z":-120},{"x":-329,"y":1973,"z":-127},{"x":-575,"y":2531,"z":5},{"x":-584,"y":2528,"z":5},{"x`
++`":-593,"y":2525,"z":-18},{"x":-581,"y":2519,"z":-5},{"x":-527,"y":2489,"z":12},{"x":-515,"y":2489,"z":21},{"x":-521,"y":2498,"z":8},{"x":-527,"y":2507,"z":12},{"x":-557,"y":2549,"z":10},{"x":-575,"y":2549,"z":8},{"x":-575,"y":2531,"z":5},{"x":-533,"y":2471,"z":11},{"x":-527,"y":2489,"z":12},{"x":-527,"y":2507,"z":12},{"x":-557,"y":2549,"z":10},{"x":-575,"y":2531,"z":5},{"x":-581,"y":2519,"z":-5},{"x":-565,"y":2539,"z":12},{"x":-527,"y":2507,"z":12},{"x":-521,"y":2543,"z":9},{"x":-557,"y":2549,"z`
++`":10},{"x":-565,"y":2539,"z":12},{"x":-581,"y":2519,"z":-5},{"x":-581,"y":2503,"z":9},{"x":-581,"y":2471,"z":9},{"x":-533,"y":2471,"z":11},{"x":-305,"y":2585,"z":-91},{"x":-305,"y":2609,"z":-88},{"x":-323,"y":2609,"z":-89},{"x":-323,"y":2567,"z":-93},{"x":-407,"y":2549,"z":-87},{"x":-395,"y":2537,"z":-86},{"x":-371,"y":2537,"z":-88},{"x":-323,"y":2567,"z":-93},{"x":-323,"y":2513,"z":-91},{"x":-305,"y":2525,"z":-93},{"x":-305,"y":2555,"z":-93},{"x":-323,"y":2567,"z":-93},{"x":-371,"y":2537,"z":-8`
++`8},{"x":-359,"y":2513,"z":-89},{"x":-323,"y":2567,"z":-93},{"x":-323,"y":2609,"z":-89},{"x":-335,"y":2627,"z":-81},{"x":-593,"y":2627,"z":-74},{"x":-593,"y":2585,"z":-85},{"x":-575,"y":2561,"z":-86},{"x":-407,"y":2549,"z":-87},{"x":-323,"y":2567,"z":-93},{"x":-335,"y":2627,"z":-81},{"x":-368,"y":2594,"z":-91},{"x":-476,"y":2576,"z":-88},{"x":-425,"y":1601,"z":-126},{"x":-413,"y":1583,"z":-126},{"x":-383,"y":1595,"z":-127},{"x":-425,"y":1601,"z":-126},{"x":-383,"y":1595,"z":-127},{"x":-383,"y":16`
++`37,"z":-127},{"x":-419,"y":1655,"z":-126},{"x":-503,"y":1661,"z":-122},{"x":-497,"y":1631,"z":-126},{"x":-407,"y":1679,"z":-127},{"x":-365,"y":1655,"z":-128},{"x":-329,"y":1655,"z":-128},{"x":-329,"y":1727,"z":-122},{"x":-329,"y":1811,"z":-120},{"x":-263,"y":1733,"z":-101},{"x":-263,"y":1775,"z":-103},{"x":-323,"y":1781,"z":-119},{"x":-329,"y":1727,"z":-122},{"x":-329,"y":1727,"z":-122},{"x":-323,"y":1781,"z":-119},{"x":-329,"y":1811,"z":-120},{"x":-503,"y":1661,"z":-122},{"x":-419,"y":1655,"z":`
++`-126},{"x":-407,"y":1679,"z":-127},{"x":-551,"y":1811,"z":-120},{"x":-581,"y":1781,"z":-118},{"x":-581,"y":1655,"z":-117},{"x":-503,"y":1661,"z":-122},{"x":-407,"y":1679,"z":-127},{"x":-329,"y":1811,"z":-120},{"x":-397.31,"y":1811,"z":-128},{"x":-107,"y":2219,"z":-128},{"x":-143,"y":2219,"z":-126},{"x":-149,"y":2201,"z":-126},{"x":-149,"y":2063,"z":-125},{"x":-71,"y":2063,"z":-125},{"x":31,"y":2219,"z":-130},{"x":-323,"y":1991,"z":-127},{"x":-263,"y":1991,"z":-126},{"x":-251,"y":2003,"z":-126},{`
++`"x":-65,"y":1997,"z":-122},{"x":-29,"y":1991,"z":-123},{"x":13,"y":1997,"z":-123},{"x":-233,"y":2285,"z":-121},{"x":-263,"y":2297,"z":-120},{"x":-317,"y":2297,"z":-118},{"x":-413,"y":2195,"z":-125},{"x":-227,"y":2201,"z":-126},{"x":103,"y":2171,"z":-124},{"x":49,"y":2225,"z":-131},{"x":31,"y":2219,"z":-130},{"x":103,"y":2153,"z":-124},{"x":-41,"y":2297,"z":-126},{"x":-101,"y":2297,"z":-128},{"x":-95,"y":2231,"z":-128},{"x":31,"y":2219,"z":-130},{"x":115,"y":2045,"z":-123},{"x":115,"y":2153,"z":-`
++`124},{"x":103,"y":2153,"z":-124},{"x":85,"y":2045,"z":-123},{"x":-71,"y":2063,"z":-125},{"x":-65,"y":1997,"z":-122},{"x":13,"y":1997,"z":-123},{"x":85,"y":2045,"z":-123},{"x":103,"y":2153,"z":-124},{"x":31,"y":2219,"z":-130},{"x":-413,"y":2195,"z":-125},{"x":-461,"y":2195,"z":-125},{"x":-527,"y":2129,"z":-124},{"x":-251,"y":2003,"z":-126},{"x":-155,"y":1997,"z":-125},{"x":-149,"y":2063,"z":-125},{"x":31,"y":2219,"z":-130},{"x":-95,"y":2231,"z":-128},{"x":-107,"y":2219,"z":-128},{"x":-527,"y":212`
++`9,"z":-124},{"x":-581,"y":2075,"z":-118},{"x":-575,"y":1973,"z":-118},{"x":-329,"y":1973,"z":-127},{"x":-323,"y":1991,"z":-127},{"x":-413,"y":2195,"z":-125},{"x":-446,"y":2072,"z":-129},{"x":-323,"y":1991,"z":-127},{"x":-251,"y":2003,"z":-126},{"x":-149,"y":2063,"z":-125},{"x":-149,"y":2201,"z":-126},{"x":-227,"y":2201,"z":-126},{"x":-413,"y":2195,"z":-125},{"x":-509,"y":887,"z":-26},{"x":-503,"y":875,"z":-24},{"x":-485,"y":893,"z":-29},{"x":-335,"y":1355,"z":-125},{"x":-341,"y":1367,"z":-126},{`
++`"x":-365,"y":1373,"z":-126},{"x":-467,"y":1391,"z":-127},{"x":-497,"y":1361,"z":-120},{"x":-497.86,"y":1325.86,"z":-123},{"x":-500.43,"y":1220.43,"z":-107},{"x":-503,"y":1115,"z":-77},{"x":-423.94,"y":1227.94,"z":-115},{"x":-533,"y":887,"z":-24},{"x":-509,"y":887,"z":-26},{"x":-485,"y":893,"z":-29},{"x":-503,"y":1115,"z":-77},{"x":-533,"y":1109,"z":-72},{"x":-365,"y":1373,"z":-126},{"x":-365,"y":1391,"z":-126},{"x":-467,"y":1391,"z":-127},{"x":-269,"y":893,"z":-24},{"x":-264.15,"y":1266.15,"z":-`
++`120},{"x":-263,"y":1355,"z":-123},{"x":-335,"y":1355,"z":-125},{"x":-423.94,"y":1227.94,"z":-115},{"x":-503,"y":1115,"z":-77},{"x":-485,"y":893,"z":-29},{"x":-335.46,"y":893,"z":-33},{"x":-318.85,"y":893,"z":-24},{"x":-404,"y":1136,"z":-96},{"x":-437,"y":2435,"z":-91},{"x":-443,"y":2447,"z":-88},{"x":-521,"y":2453,"z":-88},{"x":-413,"y":2195,"z":-125},{"x":-317,"y":2297,"z":-118},{"x":-329,"y":2303,"z":-117},{"x":-461,"y":2195,"z":-125},{"x":-413,"y":2195,"z":-125},{"x":-329,"y":2303,"z":-117},{`
++`"x":-437,"y":2435,"z":-91},{"x":-521,"y":2453,"z":-88},{"x":-497,"y":2349.8,"z":-110},{"x":-329,"y":2303,"z":-117},{"x":-329,"y":2435,"z":-89},{"x":-437,"y":2435,"z":-91},{"x":-527,"y":2129,"z":-124},{"x":-461,"y":2195,"z":-125},{"x":-497,"y":2349.8,"z":-110},{"x":-521,"y":2453,"z":-88},{"x":-523.84,"y":2299.53,"z":-116},{"x":-503,"y":-619,"z":159},{"x":-503,"y":-637,"z":159},{"x":-341,"y":-637,"z":141},{"x":-341,"y":-619,"z":140},{"x":-377,"y":-301,"z":1},{"x":-365,"y":-295,"z":1},{"x":-365,"y"`
++`:-271,"z":1},{"x":-377,"y":-265,"z":1},{"x":-377,"y":-265,"z":1},{"x":-377,"y":-199,"z":0},{"x":-395,"y":-193,"z":0},{"x":-461,"y":-211,"z":0},{"x":-473,"y":-223,"z":0},{"x":-377,"y":-301,"z":1},{"x":-431,"y":-139,"z":-1},{"x":-449,"y":-151,"z":-1},{"x":-461,"y":-211,"z":0},{"x":-395,"y":-193,"z":0},{"x":-395,"y":-55,"z":-1},{"x":-431,"y":-61,"z":-1},{"x":-431,"y":-139,"z":-1},{"x":-395,"y":-193,"z":0},{"x":-5,"y":-607,"z":2},{"x":-11,"y":-493,"z":1},{"x":-65,"y":-487,"z":1},{"x":-377,"y":-301,"`
++`z":1},{"x":-473,"y":-223,"z":0},{"x":-503,"y":-223,"z":0},{"x":-503,"y":-607,"z":2},{"x":-377,"y":-391,"z":1},{"x":-65,"y":-487,"z":1},{"x":-71,"y":-457,"z":8},{"x":-311,"y":-457,"z":8},{"x":-5,"y":-607,"z":2},{"x":-65,"y":-487,"z":1},{"x":-311,"y":-457,"z":8},{"x":-338.43,"y":-478.43,"z":1},{"x":-503,"y":-607,"z":2},{"x":-311,"y":-457,"z":8},{"x":-366,"y":-402,"z":8},{"x":-377,"y":-391,"z":1},{"x":-503,"y":-607,"z":2},{"x":-338.43,"y":-478.43,"z":1},{"x":-368,"y":-418,"z":8},{"x":-350,"y":-472,`
++`"z":8},{"x":-497,"y":-139,"z":107},{"x":-479,"y":-151,"z":107},{"x":-467,"y":-139,"z":108},{"x":-455,"y":-79,"z":107},{"x":-479,"y":-73,"z":107},{"x":-497,"y":-97,"z":107},{"x":-455,"y":-67,"z":69},{"x":-449,"y":-79,"z":69},{"x":-443,"y":-61,"z":69},{"x":-443,"y":-61,"z":69},{"x":-479,"y":-61,"z":69},{"x":-455,"y":-67,"z":69},{"x":-377,"y":2501,"z":-28},{"x":-365,"y":2501,"z":-18},{"x":-377,"y":2513,"z":-28},{"x":-392,"y":2515,"z":-21},{"x":-407,"y":2517,"z":1},{"x":-467,"y":2525,"z":1},{"x":-40`
++`9.4,"y":2505.8,"z":1},{"x":-395,"y":2501,"z":-21},{"x":-365,"y":2471,"z":-10},{"x":-365,"y":2501,"z":-18},{"x":-377,"y":2501,"z":-28},{"x":-377,"y":2471,"z":-16},{"x":-368,"y":2480,"z":-19},{"x":-335,"y":2465,"z":3},{"x":-365,"y":2471,"z":-10},{"x":-377,"y":2471,"z":-16},{"x":-395,"y":2471,"z":-20},{"x":-413,"y":2459,"z":-32},{"x":-329,"y":2447,"z":-2},{"x":-332,"y":2456,"z":6},{"x":-368,"y":2456,"z":-10},{"x":-395,"y":2501,"z":-21},{"x":-409.4,"y":2505.8,"z":1},{"x":-467,"y":2525,"z":1},{"x":-4`
++`79,"y":2525,"z":1},{"x":-479,"y":2489,"z":1},{"x":-446,"y":2480,"z":1},{"x":-429.5,"y":2475.5,"z":-10},{"x":-413,"y":2471,"z":-10},{"x":-404,"y":2471,"z":-21},{"x":-395,"y":2471,"z":-20},{"x":-395,"y":2486,"z":-10},{"x":-398,"y":2498,"z":-21},{"x":-434,"y":2480,"z":-10},{"x":-395,"y":2471,"z":-20},{"x":-404,"y":2471,"z":-21},{"x":-413,"y":2471,"z":-10},{"x":-413,"y":2459,"z":-32},{"x":-413,"y":2459,"z":-32},{"x":-443,"y":2453,"z":-32},{"x":-410.43,"y":2451.29,"z":-32},{"x":-329,"y":2447,"z":-2},`
++`{"x":-455,"y":-139,"z":69},{"x":-443,"y":-133,"z":69},{"x":-443,"y":-91,"z":69},{"x":-353,"y":1475,"z":-28},{"x":-353,"y":1379,"z":-29},{"x":-269,"y":1379,"z":-29},{"x":-269,"y":1475,"z":-29},{"x":-311,"y":-613,"z":101},{"x":-329,"y":-619,"z":103},{"x":-329,"y":-637,"z":102},{"x":-191,"y":-637,"z":103},{"x":-191,"y":-619,"z":103},{"x":-197,"y":-967,"z":51},{"x":-311,"y":-1075,"z":77},{"x":-311,"y":-1147,"z":75},{"x":-80,"y":-1147,"z":21},{"x":62.15,"y":-1147,"z":3},{"x":151,"y":-1147,"z":0},{"x"`
++`:151,"y":-1057,"z":0},{"x":133,"y":-787,"z":-11},{"x":7.29,"y":-855.57,"z":-7},{"x":-102.71,"y":-915.57,"z":18},{"x":-32,"y":-958,"z":13},{"x":157,"y":-1021,"z":1},{"x":169,"y":-1015,"z":1},{"x":169,"y":-962.38,"z":0},{"x":169,"y":-927.31,"z":-10},{"x":169,"y":-787,"z":-11},{"x":163.86,"y":-887.29,"z":-12},{"x":161.29,"y":-937.43,"z":-9},{"x":160.43,"y":-954.14,"z":0},{"x":157,"y":-1021,"z":1},{"x":160.43,"y":-954.14,"z":0},{"x":161.29,"y":-937.43,"z":-9},{"x":163.86,"y":-887.29,"z":-12},{"x":16`
++`9,"y":-787,"z":-11},{"x":133,"y":-787,"z":-11},{"x":151,"y":-1057,"z":0},{"x":133,"y":-787,"z":-11},{"x":1,"y":-649,"z":6},{"x":-197,"y":-649,"z":48},{"x":-197,"y":-861,"z":38},{"x":-197,"y":-949.33,"z":42},{"x":-197,"y":-967,"z":51},{"x":-102.71,"y":-915.57,"z":18},{"x":7.29,"y":-855.57,"z":-7},{"x":-62,"y":-724,"z":9},{"x":205,"y":449,"z":0},{"x":205,"y":467,"z":1},{"x":169,"y":473,"z":1},{"x":-257,"y":293,"z":6},{"x":-257,"y":263,"z":6},{"x":-227,"y":263,"z":6},{"x":-221,"y":299,"z":0},{"x":-`
++`245,"y":419,"z":-3},{"x":-257,"y":419,"z":-3},{"x":-257,"y":308.75,"z":-1},{"x":-137,"y":539,"z":0},{"x":-137,"y":569,"z":0},{"x":-173,"y":563,"z":0},{"x":-185,"y":539,"z":0},{"x":187,"y":263,"z":1},{"x":211,"y":287,"z":-1},{"x":217,"y":317,"z":-1},{"x":67,"y":299,"z":0},{"x":139,"y":221,"z":8},{"x":217,"y":317,"z":-1},{"x":217,"y":443,"z":0},{"x":205,"y":449,"z":0},{"x":-71,"y":473,"z":-1},{"x":-137,"y":539,"z":0},{"x":-185,"y":539,"z":0},{"x":-239,"y":539,"z":-1},{"x":-245,"y":419,"z":-3},{"x"`
++`:217,"y":317,"z":-1},{"x":205,"y":449,"z":0},{"x":169,"y":473,"z":1},{"x":67,"y":299,"z":0},{"x":217,"y":317,"z":-1},{"x":169,"y":473,"z":1},{"x":-71,"y":473,"z":-1},{"x":-245,"y":419,"z":-3},{"x":-221,"y":299,"z":0},{"x":-233,"y":1529,"z":31},{"x":-257,"y":1529,"z":30},{"x":-257,"y":779,"z":30},{"x":-233,"y":767,"z":31},{"x":-191,"y":575,"z":44},{"x":-239,"y":575,"z":44},{"x":-239,"y":551,"z":44},{"x":-185,"y":551,"z":44},{"x":-191,"y":587,"z":0},{"x":-173,"y":563,"z":0},{"x":-137,"y":569,"z":1`
++`},{"x":-137,"y":1271,"z":0},{"x":-221,"y":1529,"z":1},{"x":-221,"y":761,"z":0},{"x":-239,"y":743,"z":0},{"x":-227,"y":587,"z":0},{"x":-191,"y":587,"z":0},{"x":-221,"y":761,"z":0},{"x":-65,"y":1445,"z":-1},{"x":-137,"y":1523,"z":1},{"x":-221,"y":1529,"z":1},{"x":-137,"y":1271,"z":0},{"x":-65,"y":1337,"z":0},{"x":-179,"y":-619,"z":62},{"x":-179,"y":-637,"z":62},{"x":1,"y":-637,"z":62},{"x":1,"y":-619,"z":62},{"x":223,"y":1337,"z":0},{"x":277,"y":1337,"z":0},{"x":283,"y":1355,"z":0},{"x":295,"y":14`
++`57,"z":0},{"x":295,"y":1487,"z":0},{"x":253,"y":1529,"z":2},{"x":307,"y":1355,"z":0},{"x":307,"y":1457,"z":0},{"x":295,"y":1457,"z":0},{"x":283,"y":1355,"z":0},{"x":-119,"y":1535,"z":1},{"x":-137,"y":1523,"z":1},{"x":-65,"y":1445,"z":-1},{"x":-119,"y":1589,"z":2},{"x":-119,"y":1535,"z":1},{"x":-65,"y":1445,"z":-1},{"x":61,"y":1529,"z":0},{"x":61,"y":1589,"z":1},{"x":217,"y":1325,"z":1},{"x":223,"y":1337,"z":0},{"x":253,"y":1529,"z":2},{"x":61,"y":1529,"z":0},{"x":-65,"y":1445,"z":-1},{"x":-65,"y`
++`":1337,"z":0},{"x":-113,"y":2291,"z":-55},{"x":-125,"y":2291,"z":-55},{"x":-125,"y":2237,"z":-54},{"x":-107,"y":2237,"z":-54},{"x":-17,"y":2309,"z":-31},{"x":-17,"y":2285,"z":-31},{"x":37,"y":2231,"z":-31},{"x":103,"y":2285,"z":-31},{"x":109,"y":2303,"z":-31},{"x":43,"y":2369,"z":-31},{"x":127,"y":-175,"z":9},{"x":127,"y":-199,"z":9},{"x":139,"y":-205,"z":9},{"x":205,"y":-169,"z":8},{"x":349,"y":-595,"z":0},{"x":373,"y":-595,"z":1},{"x":373,"y":-553,"z":1},{"x":337,"y":-613,"z":1},{"x":349,"y":-`
++`595,"z":0},{"x":373,"y":-553,"z":1},{"x":385,"y":-439,"z":1},{"x":373,"y":-433,"z":0},{"x":325,"y":-313,"z":1},{"x":325,"y":-253,"z":-1},{"x":283,"y":-253,"z":0},{"x":373,"y":-379,"z":2},{"x":385,"y":-373,"z":8},{"x":325,"y":-313,"z":1},{"x":373,"y":-553,"z":1},{"x":385,"y":-547,"z":1},{"x":385,"y":-439,"z":1},{"x":205,"y":-169,"z":8},{"x":139,"y":-205,"z":9},{"x":139,"y":-259,"z":2},{"x":219,"y":-255.67,"z":8},{"x":283,"y":-253,"z":0},{"x":-11,"y":-493,"z":1},{"x":-5,"y":-607,"z":2},{"x":13,"y"`
++`:-619,"z":3},{"x":43,"y":-487,"z":2},{"x":373,"y":-433,"z":0},{"x":373,"y":-379,"z":2},{"x":325,"y":-313,"z":1},{"x":139,"y":-259,"z":2},{"x":109,"y":-265,"z":2},{"x":103,"y":-427,"z":2},{"x":283,"y":-253,"z":0},{"x":219,"y":-255.67,"z":8},{"x":373,"y":-433,"z":0},{"x":325,"y":-313,"z":1},{"x":283,"y":-253,"z":0},{"x":103,"y":-427,"z":2},{"x":43,"y":-487,"z":2},{"x":13,"y":-619,"z":3},{"x":337,"y":-613,"z":1},{"x":373,"y":-433,"z":0},{"x":283,"y":-253,"z":0},{"x":13,"y":-643,"z":5},{"x":1,"y":-6`
++`49,"z":5},{"x":133,"y":-787,"z":-11},{"x":13,"y":-619,"z":4},{"x":13,"y":-643,"z":5},{"x":133,"y":-787,"z":-11},{"x":169,"y":-787,"z":-11},{"x":361,"y":-655,"z":3},{"x":337,"y":-637,"z":3},{"x":337,"y":-637,"z":3},{"x":337,"y":-613,"z":2},{"x":13,"y":-619,"z":4},{"x":445,"y":-1009,"z":6},{"x":445,"y":-923.29,"z":-8},{"x":445,"y":-717.57,"z":-8},{"x":445,"y":-700.43,"z":0},{"x":445,"y":-649,"z":2},{"x":361,"y":-655,"z":3},{"x":169,"y":-787,"z":-11},{"x":169,"y":-909.77,"z":-11},{"x":169,"y":-1015`
++`,"z":1},{"x":186.25,"y":-1014.62,"z":6},{"x":307,"y":-1012,"z":0},{"x":324.25,"y":-1011.62,"z":6},{"x":427.75,"y":-1009.37,"z":0},{"x":376,"y":-736,"z":-8},{"x":103,"y":2171,"z":-124},{"x":103,"y":2153,"z":-124},{"x":115,"y":2153,"z":-124},{"x":121,"y":2291,"z":-126},{"x":121,"y":2291,"z":-126},{"x":49,"y":2225,"z":-130},{"x":103,"y":2171,"z":-124},{"x":505,"y":2057,"z":-124},{"x":535,"y":2063,"z":-120},{"x":535,"y":2182.54,"z":-125},{"x":535,"y":2285,"z":-115},{"x":523.46,"y":2197.31,"z":-127},`
++`{"x":499,"y":2045,"z":-124},{"x":505,"y":2057,"z":-124},{"x":523.46,"y":2197.31,"z":-127},{"x":535,"y":2285,"z":-115},{"x":505,"y":2291,"z":-126},{"x":121,"y":2291,"z":-126},{"x":115,"y":2153,"z":-124},{"x":115,"y":2045,"z":-123},{"x":499,"y":2045,"z":-124},{"x":505,"y":2291,"z":-126},{"x":499,"y":2321,"z":-119},{"x":430,"y":2234,"z":-131},{"x":499,"y":2321,"z":-119},{"x":115,"y":2321,"z":-118},{"x":121,"y":2291,"z":-126},{"x":391,"y":2543,"z":-117},{"x":385,"y":2555,"z":-116},{"x":205,"y":2555,`
++`"z":-117},{"x":199,"y":2543,"z":-118},{"x":115,"y":2321,"z":-117},{"x":499,"y":2321,"z":-119},{"x":491.29,"y":2336.86,"z":-113},{"x":468.14,"y":2384.43,"z":-120},{"x":268,"y":2474,"z":-123},{"x":73,"y":2549,"z":-117},{"x":79,"y":2357,"z":-115},{"x":115,"y":2321,"z":-117},{"x":199,"y":2543,"z":-118},{"x":499,"y":2321,"z":-119},{"x":499,"y":2338.54,"z":-103},{"x":499,"y":2461.31,"z":-104},{"x":499,"y":2478.85,"z":-117},{"x":499,"y":2513.92,"z":-119},{"x":499,"y":2531.46,"z":-107},{"x":499,"y":2549`
++`,"z":-106},{"x":468.14,"y":2547.29,"z":-117},{"x":391,"y":2543,"z":-117},{"x":468.14,"y":2384.43,"z":-120},{"x":491.29,"y":2336.86,"z":-113},{"x":490,"y":2474,"z":-118},{"x":490,"y":2402,"z":-118},{"x":490,"y":2528,"z":-107},{"x":490,"y":2348,"z":-115},{"x":571,"y":269,"z":0},{"x":547,"y":263,"z":6},{"x":541,"y":245,"z":1},{"x":661,"y":245,"z":-1},{"x":637,"y":257,"z":0},{"x":139,"y":137,"z":8},{"x":127,"y":131,"z":9},{"x":127,"y":95,"z":9},{"x":169,"y":77,"z":8},{"x":619,"y":311,"z":1},{"x":577`
++`,"y":293,"z":1},{"x":571,"y":269,"z":0},{"x":637,"y":257,"z":0},{"x":739,"y":245,"z":8},{"x":733,"y":263,"z":6},{"x":679,"y":263,"z":0},{"x":661,"y":245,"z":-1},{"x":643,"y":53,"z":-1},{"x":679,"y":53,"z":0},{"x":734,"y":229,"z":0},{"x":169,"y":59,"z":8},{"x":139,"y":47,"z":8},{"x":139,"y":-1,"z":8},{"x":193,"y":11,"z":7},{"x":169,"y":77,"z":8},{"x":169,"y":59,"z":8},{"x":193,"y":11,"z":7},{"x":721,"y":323,"z":1},{"x":643,"y":335,"z":1},{"x":619,"y":311,"z":1},{"x":637,"y":257,"z":0},{"x":169,"y`
++`":77,"z":8},{"x":193,"y":11,"z":7},{"x":217,"y":-49,"z":4},{"x":187,"y":263,"z":2},{"x":139,"y":221,"z":8},{"x":139,"y":137,"z":8},{"x":169,"y":77,"z":8},{"x":703,"y":-1,"z":0},{"x":733,"y":-133,"z":1},{"x":763,"y":-127,"z":8},{"x":679,"y":53,"z":0},{"x":703,"y":-1,"z":0},{"x":763,"y":-127,"z":8},{"x":757,"y":245,"z":8},{"x":739,"y":245,"z":8},{"x":734,"y":229,"z":0},{"x":463,"y":245,"z":-1},{"x":457,"y":263,"z":0},{"x":187,"y":263,"z":2},{"x":187,"y":263,"z":2},{"x":169,"y":77,"z":8},{"x":217,"`
++`y":-49,"z":4},{"x":358.82,"y":-46.82,"z":-5},{"x":607,"y":-43,"z":-2},{"x":595,"y":29,"z":-3},{"x":463,"y":245,"z":-1},{"x":232,"y":176,"z":8},{"x":595,"y":29,"z":-3},{"x":643,"y":53,"z":-1},{"x":661,"y":245,"z":-1},{"x":541,"y":245,"z":1},{"x":463,"y":245,"z":-1},{"x":157,"y":77,"z":53},{"x":145,"y":83,"z":53},{"x":133,"y":77,"z":53},{"x":133,"y":59,"z":53},{"x":157,"y":59,"z":53},{"x":139,"y":-103,"z":44},{"x":139,"y":-163,"z":44},{"x":205,"y":-157,"z":44},{"x":199,"y":-91,"z":44},{"x":139,"y"`
++`:-19,"z":79},{"x":139,"y":-67,"z":79},{"x":145,"y":-91,"z":79},{"x":211,"y":-67,"z":79},{"x":193,"y":-7,"z":79},{"x":163,"y":-1147,"z":40},{"x":175,"y":-1135,"z":40},{"x":175,"y":-1027,"z":40},{"x":241,"y":443,"z":0},{"x":217,"y":443,"z":0},{"x":217,"y":317,"z":-1},{"x":253,"y":473,"z":0},{"x":241,"y":443,"z":0},{"x":217,"y":317,"z":-1},{"x":457,"y":305,"z":2},{"x":469,"y":311,"z":6},{"x":469,"y":473,"z":2},{"x":253,"y":473,"z":0},{"x":217,"y":317,"z":-1},{"x":211,"y":287,"z":-1},{"x":211,"y":28`
++`7,"z":-1},{"x":187,"y":263,"z":1},{"x":457,"y":263,"z":1},{"x":457,"y":305,"z":2},{"x":595,"y":-271,"z":-1},{"x":607,"y":-271,"z":-1},{"x":607,"y":-229,"z":-2},{"x":553,"y":-373,"z":8},{"x":559,"y":-385,"z":8},{"x":595,"y":-355,"z":6},{"x":595,"y":-271,"z":-1},{"x":607,"y":-229,"z":-2},{"x":661,"y":-175,"z":-2},{"x":643,"y":-163,"z":-2},{"x":469,"y":-373,"z":8},{"x":475,"y":-385,"z":9},{"x":553,"y":-373,"z":8},{"x":595,"y":-271,"z":-1},{"x":607,"y":-229,"z":-2},{"x":217,"y":-163,"z":8},{"x":205,`
++`"y":-169,"z":8},{"x":283,"y":-253,"z":-1},{"x":325,"y":-253,"z":-1},{"x":244,"y":-185.5,"z":0},{"x":325,"y":-253,"z":-1},{"x":325,"y":-313,"z":1},{"x":385,"y":-373,"z":8},{"x":469,"y":-373,"z":8},{"x":607,"y":-229,"z":-2},{"x":643,"y":-163,"z":-2},{"x":607,"y":-43,"z":-2},{"x":217,"y":-49,"z":4},{"x":217,"y":-163,"z":8},{"x":244,"y":-185.5,"z":0},{"x":325,"y":-253,"z":-1},{"x":469,"y":-373,"z":8},{"x":607,"y":-229,"z":-2},{"x":607,"y":-43,"z":-2},{"x":358.82,"y":-46.82,"z":-5},{"x":217,"y":473,"`
++`z":45},{"x":217,"y":455,"z":45},{"x":241,"y":455,"z":45},{"x":241,"y":473,"z":45},{"x":295,"y":1487,"z":1},{"x":295,"y":1457,"z":0},{"x":307,"y":1457,"z":0},{"x":409,"y":1763,"z":95},{"x":421,"y":1769,"z":102},{"x":385,"y":1811,"z":95},{"x":401,"y":1779,"z":103},{"x":265,"y":1535,"z":2},{"x":253,"y":1529,"z":2},{"x":295,"y":1487,"z":1},{"x":373,"y":1649,"z":3},{"x":385,"y":1649,"z":22},{"x":409,"y":1649,"z":23},{"x":409,"y":1763,"z":95},{"x":401,"y":1779,"z":103},{"x":385,"y":1811,"z":95},{"x":2`
++`59,"y":1811,"z":96},{"x":278,"y":1784,"z":96},{"x":394,"y":1730,"z":77},{"x":376,"y":1748,"z":72},{"x":307,"y":1355,"z":0},{"x":421,"y":1355,"z":0},{"x":421,"y":1433,"z":0},{"x":307,"y":1457,"z":0},{"x":505,"y":1757,"z":5},{"x":421,"y":1757,"z":4},{"x":421,"y":1643,"z":3},{"x":505,"y":1439,"z":0},{"x":295,"y":1487,"z":1},{"x":307,"y":1457,"z":0},{"x":421,"y":1433,"z":0},{"x":265,"y":1535,"z":2},{"x":295,"y":1487,"z":1},{"x":421,"y":1433,"z":0},{"x":505,"y":1439,"z":0},{"x":421,"y":1643,"z":3},{"`
++`x":379,"y":1637,"z":3},{"x":379,"y":1637,"z":3},{"x":373,"y":1649,"z":3},{"x":278,"y":1784,"z":96},{"x":259,"y":1811,"z":96},{"x":259.38,"y":1793.75,"z":96},{"x":260.5,"y":1742,"z":72},{"x":262,"y":1673,"z":18},{"x":262.75,"y":1638.5,"z":4},{"x":265,"y":1535,"z":2},{"x":268,"y":1670,"z":18},{"x":268,"y":1778,"z":96},{"x":421,"y":2039,"z":96},{"x":433,"y":2045,"z":96},{"x":409,"y":2075,"z":96},{"x":289,"y":1895,"z":98},{"x":259,"y":1895,"z":98},{"x":259,"y":1811,"z":96},{"x":301,"y":1907,"z":98},`
++`{"x":289,"y":1895,"z":98},{"x":259,"y":1811,"z":96},{"x":385,"y":1811,"z":95},{"x":421,"y":1961,"z":96},{"x":421,"y":2039,"z":96},{"x":409,"y":2075,"z":96},{"x":301,"y":2075,"z":97},{"x":301,"y":1907,"z":98},{"x":385,"y":1811,"z":95},{"x":421,"y":1769,"z":102},{"x":505,"y":1769,"z":102},{"x":421,"y":1961,"z":96},{"x":301,"y":1907,"z":98},{"x":385,"y":1811,"z":95},{"x":505,"y":1769,"z":102},{"x":505,"y":1955,"z":96},{"x":511,"y":2429,"z":96},{"x":523,"y":2435,"z":96},{"x":511,"y":2453,"z":96},{"x`
++`":409,"y":2075,"z":96},{"x":433,"y":2045,"z":96},{"x":511,"y":2051,"z":96},{"x":295,"y":2105,"z":98},{"x":301,"y":2075,"z":97},{"x":409,"y":2075,"z":96},{"x":295,"y":2105,"z":98},{"x":409,"y":2075,"z":96},{"x":511,"y":2051,"z":96},{"x":511,"y":2429,"z":96},{"x":511,"y":2453,"z":96},{"x":265,"y":2453,"z":98},{"x":265,"y":2453,"z":98},{"x":265,"y":2105,"z":98},{"x":295,"y":2105,"z":98},{"x":547,"y":2627,"z":95},{"x":553,"y":2615,"z":95},{"x":583,"y":2639,"z":95},{"x":523,"y":2549,"z":96},{"x":523,`
++`"y":2573,"z":96},{"x":499,"y":2591,"z":96},{"x":595,"y":2489,"z":96},{"x":559,"y":2531,"z":96},{"x":541,"y":2531,"z":96},{"x":511,"y":2453,"z":96},{"x":523,"y":2435,"z":96},{"x":595,"y":2435,"z":97},{"x":571,"y":2711,"z":97},{"x":511,"y":2627,"z":95},{"x":547,"y":2627,"z":95},{"x":583,"y":2639,"z":95},{"x":583,"y":2705,"z":97},{"x":295,"y":2537,"z":98},{"x":265,"y":2531,"z":98},{"x":265,"y":2453,"z":98},{"x":511,"y":2453,"z":96},{"x":541,"y":2531,"z":96},{"x":523,"y":2549,"z":96},{"x":499,"y":26`
++`15,"z":96},{"x":511,"y":2627,"z":95},{"x":571,"y":2711,"z":97},{"x":571,"y":2777,"z":97},{"x":409,"y":2723,"z":97},{"x":391,"y":2705,"z":104},{"x":404.5,"y":2693.75,"z":96},{"x":511,"y":2453,"z":96},{"x":523,"y":2549,"z":96},{"x":499,"y":2591,"z":96},{"x":403,"y":2692.33,"z":96},{"x":391,"y":2705,"z":104},{"x":373.55,"y":2674.45,"z":96},{"x":295,"y":2537,"z":98},{"x":265,"y":2453,"z":98},{"x":571,"y":2777,"z":97},{"x":403,"y":2777,"z":98},{"x":409,"y":2723,"z":97},{"x":391,"y":2705,"z":104},{"x"`
++`:295,"y":2687,"z":97},{"x":295,"y":2537,"z":98},{"x":373.55,"y":2674.45,"z":96},{"x":499,"y":2591,"z":96},{"x":499,"y":2615,"z":96},{"x":404.5,"y":2693.75,"z":96},{"x":391,"y":2705,"z":104},{"x":403,"y":2692.33,"z":96},{"x":367,"y":2777,"z":138},{"x":343,"y":2777,"z":138},{"x":337,"y":2765,"z":138},{"x":373,"y":2747,"z":138},{"x":397,"y":2723,"z":138},{"x":397,"y":2747,"z":138},{"x":373,"y":2747,"z":138},{"x":367,"y":2723,"z":130},{"x":295,"y":2729,"z":138},{"x":301,"y":2699,"z":138},{"x":319,"y`
++`":2711,"z":138},{"x":307,"y":2747,"z":138},{"x":349,"y":2705,"z":131},{"x":367,"y":2723,"z":130},{"x":373,"y":2747,"z":138},{"x":337,"y":2765,"z":138},{"x":307,"y":2747,"z":138},{"x":319,"y":2711,"z":138},{"x":271,"y":2777,"z":138},{"x":265,"y":2753,"z":138},{"x":307,"y":2747,"z":138},{"x":337,"y":2765,"z":138},{"x":373,"y":-607,"z":49},{"x":349,"y":-607,"z":49},{"x":349,"y":-631,"z":49},{"x":367,"y":-643,"z":49},{"x":433,"y":1421,"z":74},{"x":433,"y":1355,"z":74},{"x":499,"y":1355,"z":74},{"x":`
++`499,"y":1427,"z":74},{"x":433,"y":2033,"z":132},{"x":433,"y":1967,"z":132},{"x":499,"y":1967,"z":132},{"x":499,"y":2033,"z":132},{"x":637,"y":797,"z":0},{"x":643,"y":785,"z":1},{"x":679,"y":815,"z":0},{"x":541,"y":791,"z":2},{"x":547,"y":773,"z":6},{"x":589,"y":773,"z":1},{"x":619,"y":797,"z":1},{"x":619,"y":797,"z":1},{"x":637,"y":797,"z":0},{"x":679,"y":815,"z":0},{"x":505,"y":791,"z":2},{"x":541,"y":791,"z":2},{"x":619,"y":797,"z":1},{"x":703,"y":1109,"z":1},{"x":703,"y":1205,"z":3},{"x":655,`
++`"y":1205,"z":2},{"x":523,"y":1169,"z":3},{"x":523,"y":1037,"z":2},{"x":679,"y":935,"z":-1},{"x":619,"y":797,"z":1},{"x":679,"y":815,"z":0},{"x":679,"y":935,"z":-1},{"x":523,"y":1037,"z":2},{"x":505,"y":1031,"z":1},{"x":505,"y":791,"z":2},{"x":679,"y":935,"z":-1},{"x":721,"y":935,"z":0},{"x":727,"y":1079,"z":0},{"x":703,"y":1109,"z":1},{"x":511,"y":2615,"z":131},{"x":511,"y":2597,"z":131},{"x":517,"y":2585,"z":131},{"x":541,"y":2585,"z":131},{"x":541,"y":2615,"z":131},{"x":721,"y":323,"z":1},{"x"`
++`:745,"y":323,"z":0},{"x":757,"y":335,"z":0},{"x":685,"y":743,"z":1},{"x":673,"y":773,"z":1},{"x":637,"y":773,"z":1},{"x":577,"y":743,"z":1},{"x":565,"y":713,"z":1},{"x":637,"y":713,"z":1},{"x":523,"y":335,"z":2},{"x":535,"y":323,"z":2},{"x":583,"y":323,"z":1},{"x":625,"y":353,"z":1},{"x":691,"y":575,"z":1},{"x":685,"y":605,"z":1},{"x":643,"y":611,"z":1},{"x":625,"y":353,"z":1},{"x":643,"y":335,"z":1},{"x":721,"y":323,"z":1},{"x":757,"y":335,"z":0},{"x":691,"y":575,"z":1},{"x":643,"y":611,"z":1},`
++`{"x":637,"y":713,"z":1},{"x":565,"y":713,"z":1},{"x":523,"y":707,"z":1},{"x":523,"y":335,"z":2},{"x":625,"y":353,"z":1},{"x":643,"y":611,"z":1},{"x":757,"y":335,"z":0},{"x":757,"y":575,"z":0},{"x":691,"y":575,"z":1},{"x":793,"y":2423,"z":126},{"x":791,"y":2435,"z":138},{"x":787,"y":2459,"z":138},{"x":727,"y":2459,"z":138},{"x":719,"y":2435,"z":138},{"x":715,"y":2423,"z":126},{"x":1285,"y":2729,"z":124},{"x":1255,"y":2735,"z":125},{"x":1261,"y":2477,"z":125},{"x":523,"y":2057,"z":126},{"x":541,"y`
++`":2057,"z":126},{"x":547,"y":2399,"z":125},{"x":523,"y":2423,"z":126},{"x":715,"y":2423,"z":126},{"x":523,"y":2423,"z":126},{"x":547,"y":2399,"z":125},{"x":1021,"y":2399,"z":125},{"x":1045,"y":2423,"z":125},{"x":793,"y":2423,"z":126},{"x":1285,"y":2729,"z":124},{"x":1261,"y":2477,"z":125},{"x":1249,"y":2327,"z":126},{"x":1279,"y":2303,"z":125},{"x":1279,"y":2303,"z":125},{"x":1249,"y":2327,"z":126},{"x":1051,"y":2327,"z":126},{"x":1027,"y":2303,"z":125},{"x":1021,"y":2399,"z":125},{"x":1027,"y":`
++`2303,"z":125},{"x":1051,"y":2327,"z":126},{"x":1045,"y":2423,"z":125},{"x":811,"y":2057,"z":-48},{"x":811,"y":2121,"z":-54},{"x":811,"y":2201,"z":-45},{"x":787,"y":2201,"z":-52},{"x":800.33,"y":2121,"z":-56},{"x":803,"y":2105,"z":-48},{"x":811,"y":2057,"z":-48},{"x":803,"y":2105,"z":-48},{"x":800.33,"y":2121,"z":-56},{"x":787,"y":2201,"z":-52},{"x":709,"y":2285,"z":-64},{"x":535,"y":2285,"z":-112},{"x":535,"y":2216.69,"z":-123},{"x":535,"y":2063,"z":-120},{"x":634,"y":2156,"z":-99},{"x":544,"y":`
++`2066,"z":-112},{"x":796,"y":2102,"z":-56},{"x":535,"y":2555,"z":138},{"x":541,"y":2543,"z":138},{"x":559,"y":2543,"z":138},{"x":565,"y":2573,"z":138},{"x":541,"y":2573,"z":138},{"x":625,"y":2363,"z":65},{"x":619,"y":2387,"z":65},{"x":553,"y":2387,"z":65},{"x":553,"y":2351,"z":65},{"x":553,"y":2615,"z":95},{"x":559,"y":2585,"z":96},{"x":571,"y":2585,"z":96},{"x":793,"y":2471,"z":96},{"x":799,"y":2459,"z":96},{"x":829,"y":2483,"z":95},{"x":553,"y":2615,"z":95},{"x":571,"y":2585,"z":96},{"x":583,"y`
++`":2567,"z":96},{"x":583,"y":2639,"z":95},{"x":577,"y":2543,"z":96},{"x":559,"y":2531,"z":96},{"x":595,"y":2489,"z":96},{"x":811,"y":2717,"z":96},{"x":835,"y":2735,"z":96},{"x":835,"y":2777,"z":101},{"x":745,"y":2777,"z":99},{"x":583,"y":2567,"z":96},{"x":577,"y":2543,"z":96},{"x":595,"y":2489,"z":96},{"x":721,"y":2471,"z":96},{"x":793,"y":2471,"z":96},{"x":829,"y":2483,"z":95},{"x":811,"y":2705,"z":96},{"x":811,"y":2717,"z":96},{"x":745,"y":2777,"z":99},{"x":739,"y":2699,"z":96},{"x":835,"y":268`
++`7,"z":96},{"x":811,"y":2705,"z":96},{"x":739,"y":2699,"z":96},{"x":595,"y":2435,"z":97},{"x":709,"y":2435,"z":97},{"x":709,"y":2459,"z":97},{"x":595,"y":2435,"z":97},{"x":709,"y":2459,"z":97},{"x":721,"y":2471,"z":96},{"x":595,"y":2489,"z":96},{"x":583,"y":2639,"z":95},{"x":583,"y":2567,"z":96},{"x":595,"y":2489,"z":96},{"x":739,"y":2699,"z":96},{"x":583,"y":2705,"z":97},{"x":583,"y":2639,"z":95},{"x":595,"y":2489,"z":96},{"x":721,"y":2471,"z":96},{"x":829,"y":2483,"z":95},{"x":835,"y":2687,"z":`
++`96},{"x":739,"y":2699,"z":96},{"x":583,"y":2639,"z":95},{"x":559,"y":-385,"z":8},{"x":559,"y":-403,"z":8},{"x":583,"y":-403,"z":8},{"x":595,"y":-355,"z":7},{"x":739,"y":-331,"z":8},{"x":739,"y":-355,"z":8},{"x":769,"y":-355,"z":8},{"x":763,"y":-127,"z":8},{"x":721,"y":-391,"z":8},{"x":721,"y":-355,"z":7},{"x":709,"y":-349,"z":7},{"x":763,"y":-127,"z":8},{"x":733,"y":-133,"z":1},{"x":721,"y":-163,"z":0},{"x":595,"y":-355,"z":7},{"x":583,"y":-403,"z":8},{"x":589,"y":-415,"z":8},{"x":697,"y":-415,"`
++`z":8},{"x":721,"y":-391,"z":8},{"x":709,"y":-349,"z":7},{"x":607,"y":-271,"z":-1},{"x":595,"y":-271,"z":-1},{"x":595,"y":-355,"z":7},{"x":709,"y":-349,"z":7},{"x":715,"y":-325,"z":6},{"x":661,"y":-175,"z":-2},{"x":607,"y":-229,"z":-2},{"x":607,"y":-271,"z":-1},{"x":721,"y":-163,"z":0},{"x":607,"y":-271,"z":-1},{"x":715,"y":-325,"z":6},{"x":739,"y":-331,"z":8},{"x":763,"y":-127,"z":8},{"x":721,"y":-163,"z":0},{"x":724,"y":-304,"z":1},{"x":559,"y":2321,"z":-29},{"x":559,"y":2297,"z":-29},{"x":631,`
++`"y":2297,"z":-12},{"x":631,"y":2321,"z":-12},{"x":559,"y":2345,"z":28},{"x":559,"y":2333,"z":28},{"x":589,"y":2333,"z":28},{"x":589,"y":2345,"z":28},{"x":631,"y":-43,"z":51},{"x":625,"y":-61,"z":45},{"x":637,"y":-61,"z":58},{"x":703,"y":-91,"z":58},{"x":706,"y":-82,"z":44},{"x":709,"y":-73,"z":44},{"x":697,"y":-73,"z":59},{"x":637,"y":-61,"z":58},{"x":634,"y":-73,"z":58},{"x":631,"y":-85,"z":45},{"x":643,"y":-85,"z":58},{"x":643,"y":-85,"z":58},{"x":640,"y":-97,"z":58},{"x":637,"y":-109,"z":43},`
++`{"x":649,"y":-109,"z":56},{"x":721,"y":-127,"z":37},{"x":715,"y":-97,"z":44},{"x":703,"y":-91,"z":58},{"x":688.6,"y":-134.2,"z":38},{"x":679,"y":-163,"z":35},{"x":721,"y":-151,"z":35},{"x":649,"y":-109,"z":56},{"x":643,"y":-127,"z":44},{"x":655,"y":-163,"z":35},{"x":679,"y":-163,"z":35},{"x":664,"y":-136,"z":38},{"x":607,"y":23,"z":34},{"x":619,"y":-43,"z":42},{"x":631,"y":-43,"z":51},{"x":645,"y":-15,"z":39},{"x":673,"y":41,"z":34},{"x":643,"y":-85,"z":58},{"x":649,"y":-109,"z":56},{"x":664,"y"`
++`:-136,"z":38},{"x":679,"y":-163,"z":35},{"x":688.6,"y":-134.2,"z":38},{"x":703,"y":-91,"z":58},{"x":697,"y":-73,"z":59},{"x":637,"y":-61,"z":58},{"x":682,"y":-100,"z":58},{"x":673,"y":41,"z":34},{"x":645,"y":-15,"z":39},{"x":631,"y":-43,"z":51},{"x":637,"y":-61,"z":58},{"x":697,"y":-73,"z":59},{"x":697,"y":-41,"z":57},{"x":697,"y":-25,"z":42},{"x":676,"y":-28,"z":54},{"x":607,"y":2351,"z":28},{"x":607,"y":2333,"z":28},{"x":631,"y":2333,"z":28},{"x":631,"y":2351,"z":28},{"x":715,"y":773,"z":0},{"`
++`x":733,"y":773,"z":6},{"x":739,"y":791,"z":6},{"x":643,"y":785,"z":1},{"x":637,"y":773,"z":1},{"x":673,"y":773,"z":1},{"x":715,"y":773,"z":0},{"x":739,"y":791,"z":6},{"x":679,"y":815,"z":0},{"x":841,"y":827,"z":0},{"x":853,"y":809,"z":0},{"x":877,"y":827,"z":0},{"x":685,"y":743,"z":0},{"x":703,"y":749,"z":0},{"x":715,"y":773,"z":0},{"x":673,"y":773,"z":1},{"x":739,"y":791,"z":6},{"x":805,"y":791,"z":0},{"x":811,"y":827,"z":0},{"x":721,"y":935,"z":0},{"x":679,"y":935,"z":-1},{"x":679,"y":815,"z":`
++`0},{"x":721,"y":935,"z":0},{"x":811,"y":827,"z":0},{"x":841,"y":827,"z":0},{"x":877,"y":827,"z":0},{"x":877,"y":1079,"z":1},{"x":727,"y":1079,"z":0},{"x":643,"y":2321,"z":-43},{"x":643,"y":2297,"z":-43},{"x":709,"y":2297,"z":-28},{"x":709,"y":2321,"z":-28},{"x":709,"y":2333,"z":5},{"x":715,"y":2363,"z":13},{"x":703,"y":2363,"z":5},{"x":643,"y":2333,"z":-1},{"x":703,"y":2363,"z":5},{"x":703,"y":2393,"z":5},{"x":643,"y":2393,"z":-1},{"x":643,"y":2333,"z":-1},{"x":985,"y":2255,"z":6},{"x":1027,"y":`
++`2297,"z":20},{"x":1015,"y":2303,"z":19},{"x":901,"y":2057,"z":-31},{"x":907,"y":2027,"z":-21},{"x":955,"y":2027,"z":-12},{"x":955,"y":2077,"z":-17},{"x":955,"y":2177,"z":-9},{"x":751,"y":2351,"z":-48},{"x":721,"y":2351,"z":-53},{"x":721,"y":2291,"z":-60},{"x":763,"y":2363,"z":-44},{"x":751,"y":2351,"z":-48},{"x":721,"y":2291,"z":-60},{"x":787,"y":2201,"z":-50},{"x":811,"y":2201,"z":-45},{"x":955,"y":2177,"z":-9},{"x":985,"y":2177,"z":-3},{"x":985,"y":2255,"z":6},{"x":721,"y":2291,"z":-60},{"x":7`
++`09,"y":2285,"z":-62},{"x":787,"y":2201,"z":-50},{"x":985,"y":2255,"z":6},{"x":1015,"y":2303,"z":19},{"x":1015,"y":2393,"z":24},{"x":897.4,"y":2393,"z":-16},{"x":763,"y":2393,"z":-39},{"x":763,"y":2363,"z":-44},{"x":811,"y":2201,"z":-45},{"x":916,"y":2300,"z":-6},{"x":811,"y":2201,"z":-45},{"x":811,"y":2121,"z":-52},{"x":811,"y":2057,"z":-48},{"x":901,"y":2057,"z":-31},{"x":955,"y":2177,"z":-9},{"x":985,"y":2255,"z":6},{"x":715,"y":2393,"z":23},{"x":715,"y":2363,"z":23},{"x":745,"y":2363,"z":26},`
++`{"x":745,"y":2393,"z":26},{"x":745,"y":1103,"z":118},{"x":739,"y":1139,"z":118},{"x":727,"y":1139,"z":118},{"x":727,"y":1091,"z":123},{"x":889,"y":1205,"z":116},{"x":829,"y":1205,"z":120},{"x":829,"y":1181,"z":124},{"x":829,"y":1175,"z":124},{"x":799,"y":1103,"z":120},{"x":745,"y":1103,"z":118},{"x":727,"y":1091,"z":123},{"x":889,"y":1091,"z":123},{"x":751,"y":1181,"z":145},{"x":817,"y":1175,"z":139},{"x":829,"y":1175,"z":124},{"x":829,"y":1181,"z":124},{"x":813.4,"y":1181,"z":139},{"x":817,"y":`
++`1157,"z":140},{"x":817,"y":1175,"z":139},{"x":751,"y":1181,"z":145},{"x":751,"y":1115,"z":150},{"x":799,"y":1115,"z":145},{"x":817,"y":1151,"z":141},{"x":889,"y":1205,"z":116},{"x":829,"y":1175,"z":124},{"x":829,"y":1157,"z":126},{"x":829,"y":1151,"z":126},{"x":829,"y":1137,"z":131},{"x":829,"y":1109,"z":120},{"x":889,"y":1091,"z":123},{"x":889,"y":1107.29,"z":116},{"x":856,"y":1154,"z":133},{"x":817,"y":1151,"z":141},{"x":829,"y":1151,"z":126},{"x":829,"y":1157,"z":126},{"x":817,"y":1157,"z":14`
++`0},{"x":817,"y":1109,"z":132},{"x":817,"y":1123,"z":143},{"x":817,"y":1151,"z":141},{"x":799,"y":1115,"z":145},{"x":799,"y":1103,"z":120},{"x":808,"y":1106,"z":132},{"x":829,"y":1109,"z":120},{"x":817,"y":1109,"z":132},{"x":808,"y":1106,"z":132},{"x":799,"y":1103,"z":120},{"x":889,"y":1091,"z":123},{"x":829,"y":2483,"z":95},{"x":799,"y":2459,"z":96},{"x":805,"y":2435,"z":97},{"x":997,"y":2435,"z":96},{"x":997,"y":2525,"z":96},{"x":1039,"y":2687,"z":95},{"x":1039,"y":2759,"z":97},{"x":1021,"y":27`
++`77,"z":100},{"x":883,"y":2777,"z":102},{"x":901,"y":2687,"z":96},{"x":1009,"y":2573,"z":96},{"x":1063,"y":2573,"z":96},{"x":1063,"y":2687,"z":95},{"x":1039,"y":2687,"z":95},{"x":1009,"y":2573,"z":96},{"x":997,"y":2525,"z":96},{"x":1009,"y":2573,"z":96},{"x":901,"y":2687,"z":96},{"x":835,"y":2687,"z":96},{"x":829,"y":2483,"z":95},{"x":817,"y":815,"z":46},{"x":817,"y":791,"z":46},{"x":835,"y":791,"z":46},{"x":841,"y":815,"z":46},{"x":841,"y":2729,"z":121},{"x":823,"y":2711,"z":122},{"x":841,"y":26`
++`99,"z":122},{"x":889,"y":2693,"z":142},{"x":889,"y":2717,"z":142},{"x":871,"y":2723,"z":142},{"x":865,"y":2717,"z":142},{"x":865,"y":2693,"z":141},{"x":847,"y":2735,"z":142},{"x":865,"y":2717,"z":142},{"x":871,"y":2723,"z":142},{"x":871,"y":2777,"z":141},{"x":853,"y":2777,"z":142},{"x":1207,"y":1205,"z":0},{"x":1201,"y":1217,"z":1},{"x":1171,"y":1217,"z":1},{"x":1165,"y":1205,"z":0},{"x":877,"y":827,"z":0},{"x":853,"y":809,"z":0},{"x":853,"y":779,"z":1},{"x":901,"y":779,"z":1},{"x":991,"y":1217,`
++`"z":1},{"x":979,"y":1205,"z":0},{"x":979,"y":1139,"z":1},{"x":1105,"y":1205,"z":0},{"x":1099,"y":1217,"z":1},{"x":979,"y":1139,"z":1},{"x":907,"y":1133,"z":1},{"x":901,"y":1085,"z":1},{"x":901,"y":779,"z":1},{"x":912,"y":767,"z":8},{"x":967,"y":707,"z":8},{"x":985,"y":725,"z":7},{"x":877,"y":827,"z":0},{"x":1165,"y":1205,"z":0},{"x":1105,"y":1205,"z":0},{"x":979,"y":1139,"z":1},{"x":1243,"y":1205,"z":0},{"x":1207,"y":1205,"z":0},{"x":901,"y":1085,"z":1},{"x":877,"y":1079,"z":1},{"x":877,"y":827,`
++`"z":0},{"x":985,"y":725,"z":7},{"x":1237,"y":725,"z":8},{"x":1237,"y":773,"z":8},{"x":985,"y":725,"z":7},{"x":1237,"y":773,"z":8},{"x":1255,"y":791,"z":0},{"x":1187.5,"y":774.5,"z":8},{"x":979,"y":1139,"z":1},{"x":901,"y":1085,"z":1},{"x":877,"y":827,"z":0},{"x":985,"y":725,"z":7},{"x":1187.5,"y":774.5,"z":8},{"x":1255,"y":791,"z":0},{"x":1243,"y":1205,"z":0},{"x":967,"y":1145,"z":36},{"x":967,"y":1205,"z":36},{"x":907,"y":1205,"z":36},{"x":901,"y":1145,"z":36},{"x":985,"y":725,"z":7},{"x":967,"`
++`y":707,"z":8},{"x":967,"y":605,"z":14},{"x":1062.29,"y":647.35,"z":6},{"x":1237,"y":725,"z":8},{"x":1237,"y":725,"z":8},{"x":1062.29,"y":647.35,"z":6},{"x":967,"y":605,"z":14},{"x":955,"y":599,"z":10},{"x":955,"y":203,"z":12},{"x":1237,"y":203,"z":11},{"x":1054,"y":482,"z":3},{"x":1249,"y":2027,"z":2},{"x":1255,"y":2015,"z":2},{"x":1273,"y":2033,"z":1},{"x":1027,"y":2297,"z":20},{"x":985,"y":2255,"z":7},{"x":985,"y":2177,"z":-4},{"x":985,"y":2177,"z":-4},{"x":955,"y":2177,"z":-8},{"x":955,"y":20`
++`77,"z":-16},{"x":955,"y":2027,"z":-11},{"x":961.67,"y":2060.33,"z":-16},{"x":1273,"y":2297,"z":14},{"x":1150,"y":2297,"z":9},{"x":1027,"y":2297,"z":20},{"x":985,"y":2177,"z":-4},{"x":961.67,"y":2060.33,"z":-16},{"x":955,"y":2027,"z":-11},{"x":1058.76,"y":2027,"z":2},{"x":1249,"y":2027,"z":2},{"x":1273,"y":2033,"z":1},{"x":1273,"y":2156.2,"z":-1},{"x":1072,"y":2252,"z":13},{"x":1009,"y":2495,"z":168},{"x":1009,"y":2435,"z":168},{"x":1069,"y":2435,"z":169},{"x":1069,"y":2495,"z":168},{"x":1069,"y"`
++`:2507,"z":152},{"x":1081,"y":2555,"z":152},{"x":1051,"y":2567,"z":152},{"x":1021,"y":2567,"z":152},{"x":1009,"y":2519,"z":152},{"x":1021,"y":2507,"z":152},{"x":1243,"y":2789,"z":108},{"x":1255,"y":2789,"z":123},{"x":1255,"y":2813,"z":124},{"x":1033,"y":2783,"z":108},{"x":1021,"y":2777,"z":100},{"x":1039,"y":2759,"z":97},{"x":1255,"y":2813,"z":124},{"x":1291,"y":2819,"z":123},{"x":1279,"y":2825,"z":125},{"x":1279,"y":2855,"z":126},{"x":1297,"y":2867,"z":127},{"x":1279,"y":2891,"z":128},{"x":1255,`
++`"y":2813,"z":124},{"x":1279,"y":2825,"z":125},{"x":1279,"y":2855,"z":126},{"x":1279,"y":2891,"z":128},{"x":1039,"y":2759,"z":97},{"x":1039,"y":2687,"z":95},{"x":1063,"y":2687,"z":95},{"x":1033,"y":2783,"z":108},{"x":1039,"y":2759,"z":97},{"x":1063,"y":2687,"z":95},{"x":1038,"y":2767,"z":97},{"x":1081,"y":2429,"z":96},{"x":1057,"y":2423,"z":97},{"x":1057,"y":2339,"z":99},{"x":1243,"y":2789,"z":108},{"x":1255,"y":2813,"z":124},{"x":1279,"y":2891,"z":128},{"x":1033,"y":2897,"z":128},{"x":1033,"y":2`
++`815.57,"z":124},{"x":1033,"y":2783,"z":108},{"x":1038,"y":2767,"z":97},{"x":1063,"y":2687,"z":95},{"x":1198,"y":2763.5,"z":98},{"x":1042,"y":2804,"z":124},{"x":1150,"y":2804,"z":124},{"x":1093,"y":2543,"z":96},{"x":1081,"y":2519,"z":96},{"x":1081,"y":2429,"z":96},{"x":1177,"y":2477,"z":95},{"x":1177,"y":2543,"z":96},{"x":1063,"y":2687,"z":95},{"x":1063,"y":2573,"z":96},{"x":1087,"y":2567,"z":96},{"x":1189,"y":2555,"z":96},{"x":1063,"y":2687,"z":95},{"x":1087,"y":2567,"z":96},{"x":1093,"y":2543,"`
++`z":96},{"x":1177,"y":2543,"z":96},{"x":1243,"y":2339,"z":100},{"x":1243,"y":2471,"z":97},{"x":1177,"y":2477,"z":95},{"x":1081,"y":2429,"z":96},{"x":1057,"y":2339,"z":99},{"x":1063,"y":2687,"z":95},{"x":1189,"y":2555,"z":96},{"x":1243,"y":2555,"z":99},{"x":1243,"y":2755.57,"z":97},{"x":1243,"y":2789,"z":108},{"x":1198,"y":2763.5,"z":98},{"x":1573,"y":2975,"z":128},{"x":1597,"y":2981,"z":133},{"x":1597,"y":3011,"z":133},{"x":1573,"y":3017,"z":127},{"x":1039,"y":3017,"z":129},{"x":1027,"y":3011,"z"`
++`:129},{"x":1027,"y":2951,"z":129},{"x":1039,"y":2945,"z":129},{"x":1279,"y":2891,"z":128},{"x":1279,"y":2891,"z":128},{"x":1297,"y":2867,"z":126},{"x":1357,"y":2867,"z":117},{"x":1357,"y":2867,"z":117},{"x":1369,"y":2849,"z":116},{"x":1573,"y":2855,"z":124},{"x":1573,"y":2975,"z":128},{"x":1573,"y":3017,"z":127},{"x":1438,"y":2858,"z":114},{"x":1039,"y":2945,"z":129},{"x":1033,"y":2897,"z":128},{"x":1279,"y":2891,"z":128},{"x":1357,"y":2867,"z":117},{"x":1573,"y":3017,"z":127},{"x":1573,"y":3071`
++`,"z":127},{"x":1412.8,"y":3071,"z":120},{"x":1323.8,"y":3071,"z":128},{"x":1039,"y":3071,"z":131},{"x":1039,"y":3017,"z":129},{"x":1279,"y":2891,"z":128},{"x":1390,"y":2948,"z":119},{"x":1189,"y":2543,"z":170},{"x":1189,"y":2483,"z":170},{"x":1249,"y":2483,"z":171},{"x":1249,"y":2543,"z":170},{"x":1243,"y":1631,"z":1},{"x":1225,"y":1625,"z":1},{"x":1225,"y":1595,"z":2},{"x":1243,"y":1589,"z":1},{"x":1243,"y":1589,"z":1},{"x":1243,"y":1547,"z":0},{"x":1255,"y":1535,"z":2},{"x":1243,"y":1631,"z":1`
++`},{"x":1243,"y":1589,"z":1},{"x":1255,"y":1535,"z":2},{"x":1324.6,"y":1535,"z":-7},{"x":1481.2,"y":1535,"z":-9},{"x":1603,"y":1535,"z":0},{"x":1609,"y":1673,"z":0},{"x":1504.43,"y":1673,"z":-9},{"x":1243,"y":1673,"z":0},{"x":1540,"y":1670,"z":0},{"x":1306,"y":1562,"z":0},{"x":1621,"y":1697,"z":0},{"x":1639,"y":1697,"z":1},{"x":1657,"y":1733,"z":1},{"x":1657,"y":1775,"z":0},{"x":1657,"y":1775,"z":0},{"x":1681,"y":1799,"z":0},{"x":1651,"y":1835,"z":-1},{"x":1231,"y":1763,"z":1},{"x":1231,"y":1685,`
++`"z":1},{"x":1243,"y":1673,"z":0},{"x":1434.71,"y":1673,"z":-9},{"x":1609,"y":1673,"z":0},{"x":1373,"y":1749,"z":-8},{"x":1255,"y":1787,"z":3},{"x":1609,"y":1673,"z":0},{"x":1621,"y":1697,"z":0},{"x":1657,"y":1775,"z":0},{"x":1651,"y":1835,"z":-1},{"x":1409.96,"y":1838.65,"z":-9},{"x":1255,"y":1841,"z":1},{"x":1255,"y":1787,"z":3},{"x":1373,"y":1749,"z":-8},{"x":1273,"y":1253,"z":0},{"x":1261,"y":1241,"z":0},{"x":1255,"y":1211,"z":0},{"x":1498.16,"y":1246.37,"z":-11},{"x":1585,"y":1259,"z":1},{"x`
++`":1498.33,"y":1257.33,"z":-11},{"x":1342.33,"y":1254.33,"z":-9},{"x":1501,"y":923,"z":-9},{"x":1603,"y":1031,"z":1},{"x":1591,"y":1037,"z":1},{"x":1501,"y":923,"z":-9},{"x":1591,"y":1037,"z":1},{"x":1591,"y":1061,"z":1},{"x":1591,"y":1061,"z":1},{"x":1603,"y":1067,"z":1},{"x":1603,"y":1235,"z":1},{"x":1585,"y":1259,"z":1},{"x":1255,"y":791,"z":0},{"x":1273,"y":779,"z":-5},{"x":1411,"y":917,"z":-10},{"x":1243,"y":1205,"z":0},{"x":1411,"y":917,"z":-10},{"x":1501,"y":923,"z":-9},{"x":1591,"y":1061,`
++`"z":1},{"x":1585,"y":1259,"z":1},{"x":1498.16,"y":1246.37,"z":-11},{"x":1255,"y":1211,"z":0},{"x":1243,"y":1205,"z":0},{"x":1540,"y":1178,"z":0},{"x":1540,"y":1250,"z":0},{"x":1249,"y":761,"z":31},{"x":1249,"y":329,"z":30},{"x":1273,"y":329,"z":30},{"x":1273,"y":767,"z":30},{"x":1249,"y":1253,"z":0},{"x":1261,"y":1241,"z":0},{"x":1273,"y":1253,"z":0},{"x":1249,"y":1361,"z":1},{"x":1585,"y":1259,"z":1},{"x":1597,"y":1289,"z":1},{"x":1591,"y":1379,"z":1},{"x":1452.05,"y":1376.47,"z":-12},{"x":1261`
++`,"y":1373,"z":0},{"x":1249,"y":1361,"z":1},{"x":1273,"y":1253,"z":0},{"x":1359.67,"y":1254.67,"z":-10},{"x":1481,"y":1257,"z":-11},{"x":1591,"y":1409,"z":1},{"x":1609,"y":1433,"z":1},{"x":1603,"y":1535,"z":0},{"x":1481.2,"y":1535,"z":-9},{"x":1324.6,"y":1535,"z":-7},{"x":1255,"y":1535,"z":2},{"x":1261,"y":1373,"z":0},{"x":1469.42,"y":1395.74,"z":-11},{"x":1261,"y":1373,"z":0},{"x":1486.79,"y":1377.11,"z":-11},{"x":1591,"y":1379,"z":1},{"x":1591,"y":1409,"z":1},{"x":1469.42,"y":1395.74,"z":-11},{`
++`"x":1801,"y":1979,"z":3},{"x":1759,"y":1973,"z":3},{"x":1753,"y":1931,"z":2},{"x":1801,"y":1799,"z":2},{"x":1651,"y":1835,"z":0},{"x":1681,"y":1799,"z":0},{"x":1801,"y":1799,"z":2},{"x":1753,"y":1931,"z":2},{"x":1681,"y":1919,"z":1},{"x":1273,"y":2033,"z":1},{"x":1255,"y":2015,"z":1},{"x":1255,"y":1841,"z":1},{"x":1297,"y":2057,"z":0},{"x":1273,"y":2033,"z":1},{"x":1255,"y":1841,"z":1},{"x":1444.39,"y":1838.13,"z":-10},{"x":1616.57,"y":1835.52,"z":-7},{"x":1651,"y":1835,"z":0},{"x":1681,"y":1919`
++`,"z":1},{"x":1633,"y":2057,"z":0},{"x":1562.26,"y":2057,"z":-10},{"x":1624,"y":1862,"z":0},{"x":1390,"y":2042,"z":-9},{"x":1291,"y":2819,"z":123},{"x":1255,"y":2813,"z":125},{"x":1255,"y":2789,"z":125},{"x":1255,"y":2735,"z":125},{"x":1270,"y":2732,"z":127},{"x":1285,"y":2729,"z":111},{"x":1286,"y":2744,"z":124},{"x":1288,"y":2774,"z":117},{"x":1282,"y":2774,"z":124},{"x":1357,"y":2819,"z":114},{"x":1291,"y":2819,"z":123},{"x":1288,"y":2774,"z":117},{"x":1286,"y":2744,"z":124},{"x":1285,"y":2729`
++`,"z":111},{"x":1291,"y":2645,"z":96},{"x":1294,"y":2744,"z":112},{"x":1615,"y":2639,"z":86},{"x":1621,"y":2759,"z":111},{"x":1573,"y":2765,"z":112},{"x":1369,"y":2849,"z":115},{"x":1357,"y":2819,"z":114},{"x":1291,"y":2645,"z":96},{"x":1461.53,"y":2641.84,"z":79},{"x":1615,"y":2639,"z":86},{"x":1573,"y":2765,"z":112},{"x":1408,"y":2756,"z":105},{"x":1573,"y":2765,"z":112},{"x":1573,"y":2855,"z":123},{"x":1369,"y":2849,"z":115},{"x":1723,"y":989,"z":0},{"x":1717,"y":1025,"z":1},{"x":1603,"y":1031`
++`,"z":1},{"x":1501,"y":923,"z":-9},{"x":1568.2,"y":807.8,"z":-15},{"x":1585,"y":779,"z":-10},{"x":1621,"y":779,"z":-6},{"x":1644.54,"y":827.46,"z":-13},{"x":1621,"y":779,"z":-6},{"x":1627,"y":767,"z":1},{"x":1783,"y":773,"z":1},{"x":1783,"y":839.46,"z":-9},{"x":1783,"y":955.77,"z":-7},{"x":1783,"y":989,"z":1},{"x":1723,"y":989,"z":0},{"x":1644.54,"y":827.46,"z":-13},{"x":1411,"y":917,"z":-10},{"x":1273,"y":779,"z":-6},{"x":1285,"y":761,"z":-10},{"x":1423.35,"y":761,"z":-18},{"x":1579,"y":761,"z":`
++`-11},{"x":1585,"y":779,"z":-10},{"x":1568.2,"y":807.8,"z":-15},{"x":1501,"y":923,"z":-9},{"x":1318,"y":770,"z":-16},{"x":1321,"y":2357,"z":23},{"x":1291,"y":2351,"z":23},{"x":1291,"y":2303,"z":14},{"x":1705,"y":2147,"z":2},{"x":1759,"y":1973,"z":3},{"x":1801,"y":1979,"z":4},{"x":1783,"y":2279,"z":4},{"x":1273,"y":2297,"z":14},{"x":1273,"y":2173.8,"z":0},{"x":1273,"y":2033,"z":1},{"x":1297,"y":2057,"z":0},{"x":1294.43,"y":2162.43,"z":-1},{"x":1291,"y":2303,"z":14},{"x":1321,"y":2357,"z":23},{"x":`
++`1291,"y":2303,"z":14},{"x":1293.57,"y":2197.57,"z":1},{"x":1297,"y":2057,"z":0},{"x":1433.42,"y":2084.79,"z":-10},{"x":1621,"y":2123,"z":-7},{"x":1627,"y":2279,"z":0},{"x":1621,"y":2435,"z":33},{"x":1421,"y":2383,"z":15},{"x":1444,"y":2228,"z":-9},{"x":1651,"y":2141,"z":0},{"x":1705,"y":2147,"z":2},{"x":1783,"y":2279,"z":4},{"x":1621,"y":2123,"z":-7},{"x":1651,"y":2141,"z":0},{"x":1783,"y":2279,"z":4},{"x":1679,"y":2279,"z":10},{"x":1661.67,"y":2279,"z":1},{"x":1627,"y":2279,"z":0},{"x":1684,"y"`
++`:2258,"z":1},{"x":1621,"y":2435,"z":33},{"x":1462.18,"y":2431.82,"z":26},{"x":1321,"y":2429,"z":37},{"x":1321,"y":2357,"z":23},{"x":1421,"y":2383,"z":15},{"x":1297,"y":2057,"z":0},{"x":1438.47,"y":2057,"z":-10},{"x":1597.63,"y":2057,"z":-9},{"x":1633,"y":2057,"z":0},{"x":1624,"y":2106.5,"z":0},{"x":1621,"y":2123,"z":-7},{"x":1433.42,"y":2084.79,"z":-10},{"x":1279,"y":191,"z":-183},{"x":1315,"y":179,"z":-187},{"x":1531,"y":179,"z":-187},{"x":1585,"y":191,"z":-180},{"x":1583.69,"y":315.69,"z":-166`
++`},{"x":1579.75,"y":689.75,"z":-30},{"x":1579,"y":761,"z":-12},{"x":1423.35,"y":761,"z":-20},{"x":1285,"y":761,"z":-11},{"x":1284.25,"y":689.75,"z":-30},{"x":1280.31,"y":315.69,"z":-165},{"x":1279.56,"y":244.44,"z":-181},{"x":1468,"y":656,"z":-53},{"x":1324,"y":440,"z":-129},{"x":1291,"y":2423,"z":88},{"x":1291,"y":2363,"z":76},{"x":1309,"y":2363,"z":76},{"x":1309,"y":2423,"z":88},{"x":1291,"y":2645,"z":95},{"x":1291,"y":2435,"z":50},{"x":1315,"y":2441,"z":49},{"x":1291,"y":2645,"z":95},{"x":1315`
++`,"y":2441,"z":49},{"x":1321,"y":2429,"z":39},{"x":1462.18,"y":2431.82,"z":29},{"x":1621,"y":2435,"z":34},{"x":1615,"y":2639,"z":85},{"x":1461.53,"y":2641.84,"z":78},{"x":1426,"y":2456,"z":35},{"x":1309,"y":2855,"z":166},{"x":1291,"y":2855,"z":166},{"x":1291,"y":2837,"z":166},{"x":1309,"y":2825,"z":167},{"x":1333,"y":2855,"z":160},{"x":1333,"y":2831,"z":160},{"x":1357,"y":2831,"z":160},{"x":1357,"y":2855,"z":160},{"x":1591,"y":707,"z":77},{"x":1591,"y":329,"z":77},{"x":1615,"y":329,"z":77},{"x":1`
++`615,"y":707,"z":78},{"x":1591,"y":767,"z":54},{"x":1591,"y":719,"z":54},{"x":1615,"y":719,"z":54},{"x":1615,"y":767,"z":54},{"x":1627,"y":767,"z":1},{"x":1627,"y":715,"z":40},{"x":1627,"y":680.33,"z":56},{"x":1627,"y":299,"z":58},{"x":1783,"y":299,"z":58},{"x":1783,"y":685.22,"z":56},{"x":1783,"y":773,"z":1},{"x":1690,"y":740,"z":17},{"x":1657,"y":2051,"z":51},{"x":1651,"y":2033,"z":44},{"x":1663,"y":2033,"z":57},{"x":1729,"y":2003,"z":59},{"x":1732,"y":2012,"z":47},{"x":1735,"y":2021,"z":47},{"`
++`x":1723,"y":2021,"z":59},{"x":1669,"y":2015,"z":59},{"x":1663,"y":1997,"z":50},{"x":1675,"y":1991,"z":58},{"x":1729,"y":1937,"z":36},{"x":1747,"y":1943,"z":36},{"x":1747,"y":1979,"z":38},{"x":1729,"y":2003,"z":59},{"x":1729,"y":1970,"z":41},{"x":1633,"y":2117,"z":34},{"x":1645,"y":2051,"z":41},{"x":1657,"y":2051,"z":51},{"x":1671,"y":2079,"z":40},{"x":1699,"y":2135,"z":34},{"x":1729,"y":1937,"z":36},{"x":1729,"y":1970,"z":41},{"x":1729,"y":2003,"z":59},{"x":1723,"y":2021,"z":59},{"x":1663,"y":20`
++`33,"z":57},{"x":1669,"y":2015,"z":59},{"x":1689,"y":1989,"z":59},{"x":1709,"y":1963,"z":38},{"x":1675,"y":1991,"z":58},{"x":1681,"y":1937,"z":36},{"x":1729,"y":1937,"z":36},{"x":1696.6,"y":1969.4,"z":42},{"x":1669,"y":2015,"z":59},{"x":1675,"y":1991,"z":58},{"x":1696.6,"y":1969.4,"z":42},{"x":1729,"y":1937,"z":36},{"x":1709,"y":1963,"z":38},{"x":1689,"y":1989,"z":59},{"x":1699,"y":2135,"z":34},{"x":1671,"y":2079,"z":40},{"x":1657,"y":2051,"z":51},{"x":1663,"y":2033,"z":57},{"x":1723,"y":2021,"z"`
++`:59},{"x":1723,"y":2053,"z":59},{"x":1723,"y":2069,"z":44},{"x":1684,"y":2048,"z":61},{"x":1702,"y":2066,"z":54},{"x":1783,"y":1001,"z":64},{"x":1783,"y":1019,"z":64},{"x":1735,"y":1025,"z":64},{"x":1729,"y":1001,"z":64}],"tris":[[0,1,2],[0,2,3],[4,5,6],[10,11,12],[9,10,12],[7,8,9],[13,14,7],[7,9,12],[7,12,13],[15,16,17],[15,17,18],[19,20,21],[25,26,27],[30,31,22],[23,24,32],[24,25,32],[28,27,32],[25,27,32],[28,29,32],[22,23,33],[29,30,33],[22,30,33],[23,32,33],[29,32,33],[34,35,36],[42,43,44],[`
++`40,41,44],[42,41,44],[43,37,44],[40,39,44],[37,38,44],[39,38,44],[45,46,47],[47,48,49],[45,47,49],[52,53,54],[51,52,54],[50,51,54],[55,56,57],[58,59,60],[68,61,62],[68,62,63],[67,68,63],[67,63,64],[67,64,65],[65,66,67],[69,70,79],[69,78,79],[74,75,79],[78,75,79],[75,76,80],[76,77,80],[77,78,80],[75,78,80],[72,73,81],[73,74,81],[79,74,81],[72,71,81],[79,70,81],[71,70,81],[82,83,84],[85,86,87],[88,89,90],[88,90,91],[92,93,94],[95,96,97],[98,99,100],[101,102,103],[98,100,101],[98,101,103],[104,105,`
++`106],[107,108,109],[110,111,112],[110,112,113],[114,115,116],[118,114,116],[116,117,118],[119,120,121],[122,123,124],[125,126,127],[127,128,129],[125,127,129],[130,131,132],[133,134,135],[137,138,139],[133,135,136],[133,136,137],[133,137,139],[140,141,142],[140,142,143],[144,145,146],[146,147,148],[144,146,148],[153,149,154],[149,150,154],[151,150,154],[151,152,154],[153,152,154],[159,155,156],[157,158,159],[156,157,159],[160,161,162],[160,162,168],[160,167,168],[166,167,168],[162,163,168],[163,`
++`164,169],[168,163,169],[164,165,169],[168,166,169],[165,166,169],[170,171,172],[170,172,173],[174,175,176],[174,176,177],[178,179,180],[181,182,178],[178,180,181],[183,184,185],[186,187,188],[189,190,191],[192,193,194],[197,192,198],[192,194,198],[195,194,198],[195,196,198],[197,196,198],[199,200,201],[199,201,202],[203,204,205],[203,205,206],[208,209,210],[207,208,210],[211,212,213],[213,214,215],[211,213,215],[216,217,218],[219,220,221],[222,223,224],[225,226,222],[222,224,225],[227,228,229],[`
++`230,231,232],[230,232,233],[234,235,236],[237,238,239],[240,241,242],[240,242,243],[244,245,246],[247,248,249],[253,254,255],[250,251,252],[252,253,255],[250,252,255],[259,256,257],[257,258,259],[260,261,262],[263,264,265],[266,267,268],[269,270,271],[269,271,266],[266,268,269],[272,273,274],[272,274,275],[280,276,277],[279,280,277],[277,278,279],[284,285,281],[284,281,282],[282,283,284],[286,287,288],[286,288,289],[290,291,292],[292,293,298],[292,290,298],[296,297,298],[290,297,298],[293,294,29`
++`9],[298,293,299],[298,296,299],[294,295,299],[296,295,299],[304,303,313],[304,305,313],[305,306,313],[306,307,313],[307,308,313],[308,309,313],[309,310,314],[310,311,314],[309,313,314],[300,301,315],[301,302,315],[313,303,315],[302,303,315],[313,312,315],[300,312,315],[312,313,316],[313,314,316],[314,311,316],[312,311,316],[320,317,318],[318,319,320],[322,323,325],[321,322,325],[323,324,326],[324,325,326],[325,323,326],[327,328,329],[327,329,330],[330,333,334],[327,330,334],[336,327,334],[334,33`
++`5,336],[330,331,337],[333,330,337],[331,332,337],[333,332,337],[338,340,341],[338,339,342],[339,340,342],[340,338,342],[345,346,348],[343,344,348],[345,344,348],[346,347,348],[343,347,348],[349,350,351],[357,352,358],[352,353,358],[354,353,358],[357,356,358],[354,355,358],[356,355,358],[362,359,360],[360,361,362],[363,364,365],[363,365,366],[367,368,369],[367,369,370],[371,372,373],[374,375,371],[371,373,374],[376,377,378],[379,380,381],[376,378,379],[376,379,381],[382,383,384],[385,386,387],[39`
++`1,392,388],[388,389,390],[388,390,391],[397,398,393],[393,394,395],[396,397,393],[393,395,396],[399,400,401],[402,403,404],[404,399,401],[401,402,404],[405,406,407],[409,410,411],[411,412,408],[408,409,411],[416,413,414],[414,415,416],[417,418,419],[419,420,421],[417,419,421],[417,421,422],[423,424,425],[423,425,426],[427,428,429],[427,429,430],[431,432,433],[431,433,434],[431,434,435],[436,437,438],[439,440,441],[442,443,444],[442,444,445],[446,447,448],[451,452,454],[449,450,454],[451,450,454]`
++`,[452,453,454],[449,453,454],[457,458,455],[455,456,457],[459,460,461],[462,463,464],[465,466,467],[468,469,470],[471,472,473],[468,470,471],[468,471,473],[478,479,474],[476,477,478],[478,474,475],[475,476,478],[480,481,482],[483,484,485],[486,487,488],[489,490,493],[490,491,493],[491,492,493],[489,492,493],[497,494,495],[495,496,497],[502,503,504],[502,504,508],[509,498,510],[499,498,510],[502,501,510],[499,500,510],[501,500,510],[502,508,510],[509,508,510],[504,505,511],[505,506,511],[507,506,`
++`511],[507,508,511],[504,508,511],[515,512,513],[513,514,515],[519,516,517],[517,518,519],[520,521,522],[524,520,522],[522,523,524],[525,526,527],[525,527,528],[529,530,531],[533,534,535],[532,533,535],[532,535,536],[537,538,539],[539,540,541],[537,539,541],[542,543,544],[549,550,551],[546,547,552],[548,549,553],[549,551,553],[551,545,553],[545,546,553],[546,552,553],[548,547,553],[552,547,553],[554,555,556],[554,556,557],[558,559,560],[558,560,561],[562,563,564],[562,564,565],[569,566,567],[567,`
++`568,569],[570,571,572],[570,572,573],[570,573,574],[578,575,576],[576,577,578],[579,580,581],[582,583,584],[582,584,585],[586,587,588],[586,588,589],[595,596,597],[594,595,597],[590,591,592],[593,594,597],[597,590,592],[592,593,597],[601,602,603],[600,601,603],[598,599,600],[598,600,603],[604,605,606],[606,607,609],[607,608,609],[608,604,609],[606,604,609],[611,612,613],[610,611,614],[611,613,614],[613,610,614],[615,616,617],[621,622,623],[621,623,618],[618,619,620],[618,620,621],[627,628,624],[`
++`625,626,627],[624,625,627],[629,630,631],[632,633,634],[635,636,637],[638,639,635],[635,637,638],[640,641,642],[640,642,643],[644,645,646],[649,644,646],[647,648,649],[646,647,649],[650,651,652],[650,652,653],[653,654,655],[650,653,655],[656,657,658],[656,658,659],[662,663,664],[664,660,665],[660,661,665],[661,662,665],[664,662,665],[673,666,674],[669,668,674],[669,670,674],[672,673,675],[670,671,675],[672,671,675],[673,674,675],[670,674,675],[666,667,676],[667,668,676],[668,674,676],[666,674,67`
++`6],[677,678,679],[682,683,684],[681,682,684],[680,681,684],[685,686,687],[694,688,689],[693,694,689],[693,689,690],[693,690,691],[691,692,693],[697,698,699],[702,703,704],[701,702,704],[701,704,705],[695,696,707],[696,697,707],[697,699,707],[695,706,707],[706,707,708],[701,705,708],[706,705,708],[701,700,708],[707,699,708],[700,699,708],[712,709,710],[710,711,712],[713,714,715],[716,717,718],[716,718,719],[716,719,720],[721,722,723],[723,724,725],[721,723,725],[726,727,728],[726,728,729],[729,73`
++`0,731],[726,729,731],[732,733,734],[739,740,735],[736,737,738],[736,738,739],[735,736,739],[741,742,743],[741,743,744],[745,746,747],[745,747,748],[749,750,751],[752,753,754],[755,756,757],[755,757,758],[759,760,761],[762,763,764],[762,764,765],[767,768,769],[766,767,769],[770,771,772],[773,774,775],[773,775,776],[777,778,779],[781,782,783],[780,781,783],[784,785,786],[787,788,789],[787,789,784],[784,786,787],[793,794,790],[792,793,790],[790,791,792],[795,796,797],[798,799,800],[801,802,803],[80`
++`4,805,806],[807,808,809],[816,810,811],[811,812,813],[814,815,817],[811,813,817],[814,813,817],[815,816,817],[811,816,817],[818,819,820],[825,826,821],[825,821,822],[824,825,822],[822,823,824],[827,828,829],[830,831,827],[827,829,830],[832,833,834],[832,834,835],[836,837,838],[839,840,841],[839,841,842],[843,844,845],[846,847,848],[846,848,849],[850,851,852],[853,854,855],[853,855,850],[850,852,853],[856,857,858],[859,860,861],[862,863,866],[863,864,866],[864,865,866],[862,865,866],[867,868,869]`
++`,[870,871,872],[870,872,867],[867,869,870],[880,873,874],[880,874,875],[879,880,875],[877,878,879],[877,879,881],[879,875,881],[875,876,881],[877,876,881],[882,883,884],[889,885,886],[889,886,887],[887,888,889],[891,892,893],[890,891,893],[894,895,896],[894,896,897],[898,899,900],[901,902,903],[901,903,904],[905,906,907],[908,909,910],[911,912,913],[911,913,914],[915,916,917],[918,919,920],[923,918,920],[923,920,921],[921,922,923],[926,927,928],[928,924,925],[925,926,928],[932,933,936],[933,934,`
++`936],[935,934,936],[935,929,936],[930,929,936],[932,931,936],[930,931,936],[937,938,939],[943,937,944],[937,939,944],[940,939,944],[940,941,944],[943,942,944],[941,942,944],[945,946,947],[948,949,950],[951,952,953],[953,948,950],[950,951,953],[954,955,956],[954,956,957],[958,959,960],[965,961,962],[964,965,962],[962,963,964],[966,967,968],[966,968,969],[970,971,972],[973,974,975],[975,976,977],[973,975,977],[978,979,980],[981,982,983],[981,983,984],[987,988,989],[985,986,987],[989,990,985],[985,`
++`987,989],[992,993,994],[996,997,991],[992,994,995],[996,991,992],[992,995,996],[999,1000,1001],[998,999,1001],[998,1001,1002],[1003,1004,998],[998,1002,1003],[1006,1007,1008],[1005,1006,1008],[1012,1009,1010],[1010,1011,1012],[1013,1014,1015],[1016,1017,1018],[1016,1018,1019],[1024,1020,1021],[1022,1023,1024],[1021,1022,1024],[1034,1025,1026],[1031,1032,1033],[1031,1033,1034],[1030,1031,1034],[1030,1034,1026],[1029,1030,1026],[1029,1026,1027],[1027,1028,1029],[1037,1038,1039],[1037,1039,1040],[1`
++`036,1037,1040],[1036,1040,1041],[1041,1042,1035],[1035,1036,1041],[1043,1044,1045],[1046,1047,1048],[1046,1048,1049],[1050,1051,1052],[1053,1054,1055],[1056,1057,1058],[1053,1055,1056],[1053,1056,1058],[1059,1060,1061],[1062,1063,1064],[1062,1064,1059],[1059,1061,1062],[1065,1066,1067],[1065,1067,1068],[1069,1070,1072],[1070,1071,1072],[1071,1069,1072],[1074,1075,1076],[1079,1080,1073],[1073,1074,1076],[1073,1076,1079],[1077,1078,1081],[1078,1079,1081],[1079,1076,1081],[1077,1076,1081],[1085,108`
++`2,1083],[1083,1084,1085],[1089,1086,1087],[1087,1088,1089],[1090,1091,1092],[1090,1092,1093],[1094,1095,1096],[1094,1096,1097],[1098,1099,1100],[1098,1100,1101],[1098,1101,1102],[1103,1104,1105],[1106,1107,1108],[1106,1108,1109],[1117,1110,1111],[1117,1111,1112],[1117,1112,1113],[1117,1113,1114],[1114,1115,1116],[1114,1116,1117],[1119,1120,1121],[1118,1119,1121],[1122,1123,1124],[1122,1124,1125],[1131,1126,1127],[1131,1127,1128],[1131,1128,1129],[1129,1130,1131],[1140,1132,1133],[1133,1134,1141]`
++`,[1135,1134,1141],[1133,1140,1141],[1137,1141,1142],[1141,1135,1142],[1135,1136,1142],[1137,1136,1142],[1137,1138,1143],[1138,1139,1143],[1140,1139,1143],[1140,1141,1143],[1137,1141,1143],[1144,1145,1146],[1147,1148,1149],[1149,1144,1146],[1146,1147,1149],[1150,1151,1152],[1150,1152,1153],[1160,1161,1162],[1157,1158,1159],[1159,1160,1163],[1162,1160,1163],[1162,1154,1163],[1155,1154,1163],[1157,1159,1164],[1155,1156,1164],[1157,1156,1164],[1159,1163,1164],[1155,1163,1164],[1165,1166,1167],[1170,`
++`1171,1172],[1169,1170,1172],[1169,1172,1177],[1176,1168,1177],[1169,1168,1177],[1176,1175,1177],[1173,1174,1178],[1174,1175,1178],[1175,1173,1178],[1172,1173,1179],[1177,1172,1179],[1173,1175,1179],[1177,1175,1179],[1182,1183,1184],[1180,1181,1182],[1180,1182,1184],[1180,1184,1185],[1187,1188,1190],[1186,1187,1190],[1188,1189,1191],[1189,1190,1191],[1190,1188,1191],[1192,1193,1194],[1200,1195,1196],[1199,1200,1196],[1197,1198,1199],[1196,1197,1199],[1202,1203,1204],[1201,1202,1204],[1206,1207,12`
++`01],[1205,1206,1201],[1201,1204,1205],[1208,1209,1210],[1208,1210,1211],[1213,1214,1215],[1216,1217,1212],[1212,1213,1215],[1212,1215,1216],[1218,1219,1220],[1221,1222,1218],[1218,1220,1221],[1224,1225,1226],[1223,1224,1226],[1229,1230,1231],[1228,1229,1231],[1227,1228,1231],[1227,1231,1232],[1236,1237,1238],[1234,1235,1236],[1238,1239,1240],[1238,1240,1241],[1236,1238,1241],[1241,1233,1234],[1234,1236,1241],[1242,1243,1244],[1248,1245,1246],[1246,1247,1248],[1255,1249,1250],[1255,1250,1251],[12`
++`53,1254,1255],[1251,1252,1253],[1251,1253,1255],[1260,1256,1257],[1260,1257,1258],[1258,1259,1260],[1264,1265,1266],[1265,1261,1266],[1262,1261,1266],[1262,1263,1266],[1264,1263,1266],[1267,1268,1269],[1267,1269,1270],[1274,1271,1272],[1272,1273,1274],[1275,1276,1277],[1275,1277,1278],[1282,1279,1280],[1280,1281,1282],[1283,1284,1285],[1283,1285,1286],[1290,1291,1287],[1287,1288,1289],[1287,1289,1290],[1295,1296,1292],[1292,1293,1294],[1292,1294,1295],[1297,1298,1299],[1297,1299,1300],[1301,1302`
++`,1303],[1301,1303,1304],[1305,1306,1307],[1305,1307,1308],[1309,1310,1311],[1309,1311,1312],[1315,1316,1317],[1317,1313,1314],[1314,1315,1317],[1321,1322,1323],[1322,1318,1323],[1321,1320,1323],[1318,1319,1323],[1320,1319,1323],[1327,1324,1325],[1325,1326,1327],[1332,1333,1334],[1328,1329,1330],[1328,1330,1331],[1328,1331,1335],[1334,1328,1335],[1331,1332,1335],[1334,1332,1335],[1336,1337,1338],[1336,1338,1339],[1346,1340,1341],[1346,1341,1342],[1346,1342,1343],[1346,1343,1344],[1344,1345,1346],`
++`[1354,1347,1348],[1350,1351,1352],[1352,1353,1355],[1354,1353,1355],[1354,1348,1355],[1349,1348,1355],[1349,1350,1355],[1352,1350,1355],[1356,1357,1358],[1362,1363,1364],[1359,1360,1361],[1362,1364,1359],[1359,1361,1362],[1366,1367,1368],[1365,1366,1368],[1371,1372,1373],[1371,1373,1374],[1369,1370,1371],[1369,1371,1374],[1369,1374,1375],[1376,1377,1378],[1376,1378,1379],[1386,1380,1381],[1386,1381,1382],[1385,1386,1382],[1385,1382,1383],[1383,1384,1385],[1387,1388,1389],[1391,1392,1393],[1390,1`
++`391,1393],[1394,1395,1396],[1397,1398,1399],[1397,1399,1400],[1400,1401,1402],[1397,1400,1402],[1405,1406,1407],[1408,1409,1410],[1403,1404,1405],[1407,1408,1411],[1403,1405,1411],[1407,1405,1411],[1408,1410,1411],[1403,1410,1411],[1417,1416,1421],[1413,1414,1421],[1416,1415,1421],[1414,1415,1421],[1418,1419,1422],[1419,1420,1422],[1420,1412,1422],[1421,1413,1422],[1412,1413,1422],[1421,1417,1422],[1418,1417,1422],[1423,1424,1425],[1427,1423,1425],[1425,1426,1427],[1428,1429,1430],[1436,1431,143`
++`2],[1436,1432,1433],[1436,1433,1434],[1434,1435,1436],[1437,1438,1439],[1440,1441,1442],[1443,1444,1447],[1444,1445,1447],[1445,1446,1447],[1443,1446,1447],[1455,1448,1456],[1450,1449,1456],[1448,1449,1456],[1455,1456,1457],[1453,1454,1457],[1455,1454,1457],[1457,1456,1458],[1456,1450,1458],[1451,1450,1458],[1451,1452,1458],[1457,1453,1458],[1452,1453,1458],[1459,1460,1461],[1459,1461,1462],[1467,1463,1464],[1464,1465,1466],[1464,1466,1467],[1471,1468,1469],[1469,1470,1471],[1472,1473,1474],[147`
++`4,1475,1476],[1472,1474,1476],[1477,1478,1479],[1477,1479,1480],[1477,1480,1481],[1482,1483,1484],[1482,1484,1485],[1486,1487,1488],[1486,1488,1489],[1490,1491,1492],[1493,1494,1495],[1496,1497,1498],[1496,1498,1499],[1496,1499,1500],[1501,1502,1503],[1501,1503,1504],[1505,1506,1507],[1505,1507,1508],[1512,1509,1510],[1510,1511,1512],[1513,1514,1515],[1516,1517,1513],[1513,1515,1516],[1518,1519,1520],[1521,1522,1523],[1524,1525,1526],[1524,1526,1527],[1528,1529,1530],[1531,1532,1533],[1531,1533,`
++`1534],[1535,1536,1537],[1538,1539,1535],[1535,1537,1538],[1540,1541,1542],[1540,1542,1543],[1549,1544,1545],[1547,1548,1549],[1545,1546,1547],[1545,1547,1549],[1550,1551,1552],[1553,1554,1555],[1555,1556,1557],[1553,1555,1557],[1553,1557,1558],[1559,1560,1561],[1559,1561,1562],[1559,1562,1563],[1569,1564,1565],[1569,1565,1566],[1566,1567,1568],[1566,1568,1569],[1570,1571,1572],[1576,1570,1572],[1572,1573,1574],[1572,1574,1576],[1574,1575,1577],[1575,1576,1577],[1576,1574,1577],[1578,1579,1580],[`
++`1584,1585,1590],[1586,1585,1590],[1584,1583,1590],[1589,1581,1591],[1581,1582,1591],[1590,1583,1591],[1582,1583,1591],[1590,1588,1591],[1589,1588,1591],[1587,1588,1592],[1588,1590,1592],[1590,1586,1592],[1587,1586,1592],[1593,1594,1595],[1593,1595,1596],[1604,1593,1596],[1598,1602,1605],[1596,1597,1605],[1598,1597,1605],[1602,1603,1605],[1596,1604,1605],[1603,1604,1605],[1600,1601,1606],[1598,1599,1606],[1600,1599,1606],[1601,1602,1606],[1598,1602,1606],[1607,1608,1609],[1610,1611,1612],[1613,16`
++`14,1615],[1616,1617,1618],[1616,1618,1619],[1626,1627,1620],[1626,1620,1628],[1626,1625,1628],[1623,1624,1628],[1625,1624,1628],[1628,1620,1629],[1620,1621,1629],[1622,1621,1629],[1622,1623,1629],[1628,1623,1629],[1630,1631,1632],[1633,1634,1635],[1633,1635,1636],[1637,1638,1639],[1637,1639,1640],[1641,1642,1643],[1644,1645,1646],[1649,1650,1651],[1648,1649,1651],[1651,1644,1646],[1647,1648,1651],[1646,1647,1651],[1652,1653,1654],[1655,1656,1657],[1655,1657,1658],[1659,1660,1661],[1663,1664,1665`
++`],[1669,1662,1670],[1667,1668,1671],[1668,1669,1671],[1669,1670,1671],[1667,1670,1671],[1662,1663,1672],[1670,1662,1672],[1663,1665,1672],[1665,1666,1673],[1666,1667,1673],[1667,1670,1673],[1665,1672,1673],[1670,1672,1673],[1677,1674,1675],[1675,1676,1677],[1681,1682,1683],[1681,1683,1684],[1680,1681,1684],[1684,1678,1679],[1679,1680,1684],[1685,1686,1687],[1694,1688,1689],[1691,1692,1693],[1691,1693,1694],[1690,1691,1694],[1689,1690,1694],[1696,1697,1698],[1696,1698,1699],[1699,1700,1702],[1695`
++`,1696,1702],[1699,1696,1702],[1700,1701,1702],[1695,1701,1702],[1708,1709,1710],[1703,1704,1705],[1706,1707,1708],[1706,1708,1710],[1710,1703,1705],[1705,1706,1710],[1713,1714,1715],[1712,1713,1715],[1711,1712,1715],[1716,1717,1718],[1719,1720,1721],[1724,1719,1721],[1722,1723,1724],[1721,1722,1724],[1725,1726,1727],[1728,1729,1730],[1735,1731,1736],[1731,1732,1736],[1733,1732,1736],[1733,1734,1736],[1735,1734,1736],[1737,1738,1739],[1737,1739,1740],[1741,1742,1743],[1744,1745,1746],[1741,1743,1`
++`744],[1741,1744,1746],[1747,1748,1749],[1751,1752,1753],[1750,1751,1754],[1751,1753,1754],[1753,1747,1754],[1750,1749,1754],[1747,1749,1754],[1755,1756,1757],[1755,1757,1758],[1759,1760,1761],[1759,1761,1762],[1763,1764,1765],[1766,1767,1768],[1770,1766,1768],[1768,1769,1770],[1772,1773,1774],[1774,1775,1776],[1777,1771,1778],[1771,1772,1778],[1774,1772,1778],[1774,1776,1778],[1777,1776,1778],[1779,1780,1781],[1785,1786,1787],[1785,1787,1782],[1782,1783,1784],[1782,1784,1785],[1790,1791,1792],[1`
++`789,1790,1792],[1788,1789,1792],[1793,1794,1795],[1797,1798,1799],[1796,1797,1799],[1796,1799,1800],[1796,1800,1801],[1803,1804,1805],[1801,1802,1805],[1803,1802,1805],[1804,1796,1805],[1801,1796,1805],[1806,1807,1808],[1809,1810,1811],[1812,1813,1814],[1814,1809,1811],[1811,1812,1814],[1820,1815,1816],[1820,1816,1817],[1818,1819,1820],[1817,1818,1820],[1823,1824,1825],[1823,1825,1826],[1822,1823,1826],[1821,1822,1826],[1821,1826,1828],[1826,1827,1828],[1827,1821,1828],[1834,1835,1836],[1830,183`
++`1,1832],[1829,1830,1832],[1829,1832,1833],[1829,1833,1834],[1829,1834,1836],[1837,1838,1839],[1837,1839,1840],[1841,1842,1843],[1841,1843,1844],[1845,1846,1847],[1848,1849,1850],[1848,1850,1851],[1852,1853,1854],[1855,1856,1857],[1858,1859,1855],[1855,1857,1858],[1860,1861,1862],[1863,1864,1860],[1860,1862,1863],[1865,1866,1867],[1868,1869,1870],[1871,1872,1873],[1871,1873,1874],[1875,1876,1877],[1883,1875,1884],[1879,1880,1884],[1879,1878,1884],[1875,1877,1884],[1878,1877,1884],[1880,1881,1885]`
++`,[1884,1880,1885],[1881,1882,1885],[1884,1883,1885],[1882,1883,1885],[1889,1890,1892],[1890,1891,1892],[1886,1891,1892],[1889,1888,1892],[1886,1887,1892],[1888,1887,1892],[1893,1894,1895],[1896,1897,1898],[1898,1899,1900],[1896,1898,1900],[1901,1902,1903],[1904,1905,1906],[1901,1903,1904],[1901,1904,1906],[1910,1907,1908],[1908,1909,1910],[1911,1912,1913],[1911,1913,1914],[1915,1916,1917],[1918,1919,1920],[1924,1921,1922],[1922,1923,1924],[1928,1929,1930],[1926,1927,1928],[1925,1926,1928],[1930,`
++`1931,1932],[1925,1928,1930],[1925,1930,1932],[1933,1934,1935],[1933,1935,1936],[1937,1938,1939],[1937,1939,1940],[1941,1942,1943],[1945,1946,1941],[1941,1943,1944],[1941,1944,1945],[1947,1948,1949],[1950,1951,1952],[1953,1954,1956],[1955,1954,1956],[1950,1952,1957],[1952,1953,1957],[1953,1956,1957],[1950,1955,1957],[1956,1955,1957],[1958,1959,1960],[1961,1962,1963],[1961,1963,1964],[1964,1965,1966],[1961,1964,1966],[1967,1968,1969],[1967,1969,1970],[1967,1970,1971],[1972,1973,1974],[1972,1974,19`
++`75],[1976,1977,1978],[1979,1980,1981],[1982,1983,1984],[1984,1985,1986],[1986,1987,1988],[1986,1988,1982],[1982,1984,1986],[1989,1990,1991],[1989,1991,1992],[1989,1992,1993],[1989,1993,1994],[1995,1996,1997],[1998,1999,2000],[2001,2002,2003],[2005,2001,2003],[2003,2004,2005],[2006,2007,2008],[2006,2008,2009],[2010,2011,2012],[2010,2012,2013],[2014,2015,2016],[2014,2016,2017],[2018,2019,2020],[2018,2020,2021],[2021,2022,2023],[2018,2021,2023],[2024,2025,2026],[2027,2028,2029],[2030,2031,2032],[20`
++`35,2036,2039],[2036,2037,2039],[2038,2037,2039],[2038,2033,2039],[2035,2034,2039],[2033,2034,2039],[2042,2043,2044],[2040,2041,2042],[2040,2042,2044],[2040,2044,2045],[2046,2047,2048],[2049,2050,2051],[2052,2053,2054],[2049,2051,2052],[2055,2056,2057],[2054,2055,2057],[2052,2054,2057],[2049,2052,2057],[2058,2059,2060],[2060,2061,2062],[2058,2060,2062],[2063,2064,2065],[2067,2068,2069],[2067,2069,2070],[2066,2067,2075],[2067,2070,2075],[2071,2070,2075],[2066,2074,2075],[2074,2073,2075],[2071,2072`
++`,2075],[2073,2072,2075],[2076,2077,2078],[2079,2080,2081],[2085,2086,2087],[2082,2083,2084],[2084,2085,2087],[2082,2084,2087],[2088,2089,2090],[2093,2094,2095],[2092,2093,2095],[2091,2092,2095],[2099,2096,2097],[2097,2098,2099],[2100,2101,2102],[2100,2102,2103],[2104,2105,2106],[2106,2107,2108],[2109,2104,2106],[2106,2108,2109],[2113,2110,2111],[2111,2112,2113],[2114,2115,2116],[2114,2116,2117],[2118,2119,2120],[2121,2122,2123],[2125,2121,2123],[2123,2124,2125],[2126,2127,2128],[2130,2131,2132],`
++`[2129,2130,2132],[2129,2132,2133],[2136,2137,2139],[2136,2135,2139],[2135,2134,2139],[2137,2138,2140],[2139,2137,2140],[2138,2134,2140],[2139,2134,2140],[2141,2142,2143],[2144,2145,2146],[2146,2141,2143],[2143,2144,2146],[2147,2148,2149],[2150,2151,2152],[2153,2154,2155],[2153,2155,2156],[2160,2153,2156],[2159,2160,2156],[2159,2156,2157],[2157,2158,2159],[2164,2161,2165],[2161,2162,2165],[2162,2163,2165],[2164,2163,2165],[2170,2171,2173],[2167,2168,2173],[2170,2169,2173],[2168,2169,2173],[2171,2`
++`172,2173],[2167,2166,2173],[2172,2166,2173],[2182,2183,2184],[2181,2182,2184],[2180,2181,2184],[2176,2177,2178],[2180,2184,2175],[2176,2178,2179],[2184,2174,2185],[2174,2175,2185],[2175,2184,2185],[2179,2180,2186],[2180,2175,2186],[2175,2176,2186],[2179,2176,2186],[2188,2189,2190],[2187,2188,2190],[2191,2192,2193],[2191,2193,2194],[2195,2196,2197],[2201,2198,2199],[2199,2200,2201],[2202,2203,2204],[2205,2206,2202],[2202,2204,2205],[2211,2212,2213],[2207,2208,2209],[2207,2209,2210],[2213,2214,221`
++`5],[2207,2210,2217],[2215,2216,2217],[2207,2216,2217],[2215,2213,2217],[2210,2211,2217],[2213,2211,2217],[2218,2219,2220],[2225,2218,2220],[2224,2225,2220],[2224,2220,2221],[2223,2224,2221],[2221,2222,2223],[2227,2228,2229],[2232,2226,2227],[2229,2230,2231],[2232,2227,2229],[2229,2231,2232],[2237,2238,2239],[2236,2237,2239],[2234,2235,2241],[2240,2233,2241],[2234,2233,2241],[2235,2236,2241],[2240,2239,2241],[2236,2239,2241],[2242,2243,2244],[2245,2246,2247],[2251,2245,2247],[2251,2247,2248],[224`
++`9,2250,2251],[2248,2249,2251],[2252,2253,2254],[2252,2254,2255],[2256,2257,2258],[2260,2256,2258],[2258,2259,2260],[2261,2262,2263],[2264,2265,2266],[2266,2267,2268],[2264,2266,2268],[2269,2270,2271],[2272,2273,2274],[2275,2276,2277],[2272,2274,2275],[2272,2275,2277],[2278,2279,2280],[2278,2280,2281],[2282,2283,2284],[2282,2284,2285],[2286,2287,2288],[2291,2286,2288],[2291,2288,2289],[2289,2290,2291],[2292,2293,2294],[2292,2294,2295],[2296,2297,2298],[2299,2300,2296],[2296,2298,2299],[2304,2301,`
++`2302],[2302,2303,2304],[2305,2306,2307],[2308,2309,2310],[2305,2307,2308],[2305,2308,2310],[2311,2312,2313],[2311,2313,2314],[2315,2316,2317],[2318,2319,2320],[2320,2321,2322],[2318,2320,2322],[2323,2324,2325],[2326,2327,2328],[2323,2325,2326],[2323,2326,2328],[2329,2330,2331],[2329,2331,2332],[2333,2334,2335],[2335,2336,2337],[2337,2338,2333],[2333,2335,2337],[2339,2340,2341],[2339,2341,2342],[2343,2344,2345],[2346,2347,2348],[2348,2349,2350],[2346,2348,2350],[2351,2352,2353],[2354,2355,2356],[`
++`2357,2358,2359],[2361,2362,2363],[2360,2361,2363],[2360,2363,2364],[2365,2366,2367],[2365,2367,2368],[2369,2370,2371],[2376,2372,2373],[2375,2376,2373],[2373,2374,2375],[2377,2378,2379],[2380,2381,2382],[2384,2385,2380],[2383,2384,2380],[2380,2382,2383],[2386,2387,2388],[2389,2390,2391],[2389,2391,2392],[2392,2393,2394],[2389,2392,2394],[2395,2396,2397],[2410,2398,2399],[2405,2406,2407],[2401,2402,2403],[2409,2410,2399],[2408,2409,2399],[2405,2407,2408],[2403,2404,2411],[2399,2400,2411],[2403,24`
++`01,2411],[2400,2401,2411],[2399,2408,2411],[2404,2405,2411],[2408,2405,2411],[2412,2413,2414],[2412,2414,2415],[2416,2417,2418],[2421,2422,2423],[2420,2421,2423],[2419,2420,2423],[2426,2427,2428],[2424,2425,2426],[2424,2426,2428],[2434,2429,2435],[2432,2431,2435],[2429,2430,2435],[2431,2430,2435],[2432,2433,2435],[2434,2433,2435],[2436,2437,2438],[2442,2443,2447],[2440,2441,2447],[2442,2441,2447],[2443,2444,2447],[2444,2445,2447],[2445,2446,2447],[2440,2439,2447],[2446,2439,2447],[2448,2449,2450`
++`],[2448,2450,2451],[2462,2452,2453],[2459,2460,2463],[2454,2455,2463],[2455,2456,2463],[2460,2461,2463],[2453,2454,2464],[2454,2463,2464],[2461,2463,2464],[2456,2457,2465],[2457,2458,2465],[2459,2458,2465],[2459,2463,2465],[2456,2463,2465],[2461,2462,2466],[2462,2453,2466],[2453,2464,2466],[2461,2464,2466],[2467,2468,2469],[2470,2471,2467],[2467,2469,2470],[2472,2473,2474],[2472,2474,2475],[2476,2477,2478],[2476,2478,2479],[2486,2480,2481],[2486,2481,2482],[2486,2482,2483],[2484,2485,2486],[2483`
++`,2484,2486],[2487,2488,2489],[2487,2489,2490],[2491,2492,2493],[2495,2496,2497],[2494,2495,2497],[2498,2499,2500],[2501,2502,2503],[2501,2503,2504],[2505,2506,2507],[2511,2512,2513],[2508,2509,2510],[2511,2513,2508],[2508,2510,2511],[2514,2515,2516],[2518,2519,2520],[2520,2521,2522],[2520,2522,2523],[2517,2518,2524],[2518,2520,2524],[2520,2523,2524],[2517,2523,2524],[2525,2526,2527],[2528,2529,2525],[2525,2527,2528],[2530,2531,2532],[2534,2530,2532],[2532,2533,2534],[2535,2536,2537],[2535,2537,2`
++`538],[2539,2540,2541],[2542,2543,2539],[2539,2541,2542],[2544,2545,2546],[2547,2548,2549],[2550,2551,2552],[2553,2554,2555],[2556,2557,2558],[2553,2555,2556],[2553,2556,2558],[2561,2562,2559],[2559,2560,2561],[2563,2564,2565],[2566,2567,2568],[2566,2568,2569],[2570,2571,2572],[2573,2574,2575],[2575,2576,2577],[2573,2575,2577],[2582,2578,2579],[2580,2581,2582],[2579,2580,2582],[2583,2584,2585],[2583,2585,2586],[2587,2588,2589],[2590,2591,2592],[2597,2590,2592],[2597,2592,2593],[2593,2594,2595],[2`
++`595,2596,2597],[2593,2595,2597],[2601,2598,2599],[2599,2600,2601],[2602,2603,2604],[2608,2605,2606],[2606,2607,2608],[2609,2610,2611],[2617,2618,2619],[2612,2613,2620],[2615,2614,2620],[2613,2614,2620],[2616,2617,2621],[2619,2617,2621],[2619,2612,2621],[2620,2612,2621],[2620,2615,2621],[2616,2615,2621],[2622,2623,2624],[2622,2624,2625],[2626,2627,2628],[2626,2628,2629],[2630,2631,2632],[2633,2634,2635],[2637,2638,2633],[2635,2636,2637],[2633,2635,2637],[2641,2642,2643],[2647,2639,2640],[2646,264`
++`7,2640],[2640,2641,2648],[2646,2640,2648],[2646,2645,2648],[2641,2644,2648],[2645,2644,2648],[2641,2643,2649],[2643,2644,2649],[2644,2641,2649],[2650,2651,2652],[2653,2654,2655],[2656,2657,2658],[2656,2658,2659],[2660,2661,2662],[2660,2662,2663],[2660,2663,2664],[2665,2666,2667],[2668,2669,2670],[2672,2668,2670],[2670,2671,2672],[2673,2674,2675],[2676,2677,2678],[2679,2680,2681],[2682,2683,2684],[2685,2686,2687],[2685,2687,2682],[2682,2684,2685],[2688,2689,2690],[2691,2692,2693],[2694,2695,2696]`
++`,[2697,2698,2699],[2700,2701,2702],[2700,2702,2697],[2697,2699,2700],[2704,2705,2706],[2706,2707,2703],[2703,2704,2706],[2708,2709,2710],[2711,2712,2713],[2718,2719,2720],[2714,2715,2716],[2718,2720,2714],[2714,2716,2717],[2714,2717,2718],[2724,2725,2726],[2721,2722,2723],[2723,2724,2726],[2726,2727,2728],[2721,2723,2726],[2721,2726,2728],[2729,2730,2731],[2735,2732,2733],[2733,2734,2735],[2738,2739,2740],[2737,2738,2740],[2736,2737,2740],[2741,2742,2743],[2741,2743,2744],[2745,2746,2747],[2745,`
++`2747,2748],[2749,2750,2751],[2749,2751,2752],[2753,2754,2755],[2757,2758,2753],[2755,2756,2757],[2753,2755,2757],[2759,2760,2761],[2759,2761,2762],[2763,2764,2765],[2763,2765,2766],[2767,2768,2769],[2767,2769,2770],[2774,2771,2772],[2772,2773,2774],[2775,2776,2777],[2778,2779,2780],[2778,2780,2781],[2782,2783,2784],[2785,2786,2787],[2788,2789,2790],[2788,2790,2791],[2788,2791,2792],[2788,2792,2793],[2794,2795,2796],[2796,2797,2798],[2799,2794,2796],[2796,2798,2799],[2800,2801,2802],[2800,2802,28`
++`03],[2804,2805,2806],[2806,2807,2808],[2804,2806,2808],[2809,2810,2811],[2812,2813,2814],[2815,2816,2817],[2817,2812,2814],[2814,2815,2817],[2818,2819,2820],[2818,2820,2821],[2822,2823,2824],[2825,2826,2827],[2825,2827,2828],[2829,2830,2825],[2825,2828,2829],[2831,2832,2833],[2836,2831,2833],[2834,2835,2836],[2833,2834,2836],[2837,2838,2839],[2841,2842,2843],[2840,2841,2843],[2844,2845,2840],[2840,2843,2844],[2846,2847,2848],[2849,2850,2851],[2849,2851,2852],[2853,2854,2855],[2858,2853,2855],[28`
++`56,2857,2858],[2855,2856,2858],[2860,2861,2862],[2859,2860,2862],[2864,2865,2866],[2863,2864,2866],[2867,2868,2869],[2867,2869,2870],[2875,2876,2871],[2875,2871,2872],[2875,2872,2873],[2873,2874,2875],[2881,2882,2883],[2881,2880,2885],[2880,2879,2885],[2881,2883,2885],[2884,2877,2886],[2877,2885,2886],[2885,2883,2886],[2884,2883,2886],[2877,2878,2887],[2885,2877,2887],[2878,2879,2887],[2885,2879,2887],[2888,2889,2890],[2891,2892,2888],[2888,2890,2891],[2893,2894,2895],[2893,2895,2896],[2897,2898`
++`,2899],[2900,2901,2902],[2903,2904,2905],[2903,2905,2906],[2907,2908,2909],[2910,2911,2912],[2910,2912,2913],[2914,2915,2916],[2917,2918,2919],[2923,2920,2921],[2921,2922,2923],[2924,2925,2926],[2927,2928,2929],[2931,2932,2933],[2930,2931,2933],[2934,2935,2936],[2937,2938,2939],[2940,2941,2942],[2943,2944,2945],[2945,2940,2942],[2942,2943,2945],[2946,2947,2948],[2946,2948,2949],[2950,2951,2952],[2950,2952,2953],[2954,2955,2956],[2957,2958,2959],[2960,2961,2962],[2963,2964,2965],[2960,2962,2963],`
++`[2960,2963,2965],[2966,2967,2968],[2968,2969,2970],[2966,2968,2970],[2971,2972,2973],[2971,2973,2974],[2977,2978,2980],[2975,2976,2980],[2977,2976,2980],[2978,2979,2980],[2975,2979,2980],[2984,2981,2982],[2982,2983,2984],[2988,2985,2986],[2986,2987,2988],[2989,2990,2991],[2993,2994,2995],[2992,2993,2995],[2997,2998,2999],[2996,2997,2999],[3001,3002,3003],[3000,3001,3003],[3004,3005,3006],[3007,3008,3009],[3007,3009,3004],[3004,3006,3007],[3014,3010,3011],[3012,3013,3014],[3011,3012,3014],[3016,3`
++`017,3018],[3015,3016,3018],[3015,3018,3019],[3022,3023,3024],[3026,3027,3020],[3026,3020,3028],[3020,3021,3028],[3024,3022,3028],[3021,3022,3028],[3024,3025,3028],[3026,3025,3028],[3030,3031,3036],[3032,3031,3036],[3035,3034,3036],[3032,3033,3036],[3034,3033,3036],[3035,3029,3036],[3030,3029,3036],[3040,3037,3038],[3038,3039,3040],[3041,3042,3043],[3044,3045,3046],[3049,3044,3046],[3049,3046,3047],[3047,3048,3049],[3050,3051,3052],[3053,3054,3055],[3053,3055,3056],[3057,3058,3059],[3062,3057,305`
++`9],[3060,3061,3062],[3059,3060,3062],[3063,3064,3065],[3063,3065,3066],[3067,3068,3063],[3063,3066,3067],[3072,3069,3070],[3070,3071,3072],[3073,3074,3075],[3073,3075,3076],[3077,3078,3079],[3077,3079,3080],[3081,3082,3083],[3084,3085,3086],[3084,3086,3087],[3084,3087,3088],[3089,3090,3091],[3092,3093,3094],[3094,3095,3096],[3092,3094,3096],[3097,3098,3099],[3100,3101,3102],[3106,3107,3108],[3109,3103,3110],[3106,3105,3110],[3103,3104,3110],[3105,3104,3110],[3106,3108,3110],[3109,3108,3110],[311`
++`2,3113,3114],[3111,3112,3114],[3115,3116,3111],[3111,3114,3115],[3120,3117,3118],[3118,3119,3120],[3121,3122,3123],[3121,3123,3124],[3127,3128,3125],[3125,3126,3127],[3129,3130,3131],[3129,3131,3132],[3134,3135,3136],[3134,3136,3137],[3133,3134,3137],[3142,3143,3138],[3142,3138,3139],[3140,3141,3142],[3139,3140,3142],[3149,3150,3151],[3151,3144,3152],[3144,3145,3152],[3146,3145,3152],[3146,3147,3152],[3147,3148,3152],[3151,3149,3152],[3148,3149,3152],[3156,3153,3154],[3154,3155,3156],[3160,3161,`
++`3162],[3160,3162,3157],[3160,3157,3158],[3158,3159,3160],[3163,3164,3165],[3163,3165,3166],[3163,3166,3167],[3168,3169,3170],[3168,3170,3171],[3168,3171,3172],[3173,3174,3175],[3175,3176,3177],[3173,3175,3177],[3173,3177,3178],[3179,3180,3181],[3179,3181,3182],[3183,3184,3185],[3183,3185,3186],[3183,3186,3187],[3188,3189,3190],[3188,3190,3191],[3192,3193,3194],[3196,3197,3198],[3199,3195,3196],[3196,3198,3199],[3200,3201,3202],[3203,3204,3200],[3200,3202,3203],[3205,3206,3207],[3205,3207,3208],[`
++`3209,3210,3211],[3209,3211,3212],[3213,3214,3215],[3216,3217,3213],[3213,3215,3216],[3218,3219,3220],[3225,3221,3222],[3222,3223,3224],[3222,3224,3225],[3226,3227,3228],[3230,3226,3228],[3228,3229,3230],[3231,3232,3233],[3234,3235,3236],[3238,3239,3240],[3237,3238,3240],[3243,3244,3245],[3241,3242,3243],[3243,3245,3246],[3247,3241,3243],[3243,3246,3247],[3248,3249,3250],[3248,3250,3251],[3252,3253,3254],[3252,3254,3255],[3252,3255,3256],[3262,3257,3263],[3257,3258,3263],[3260,3259,3263],[3258,32`
++`59,3263],[3260,3261,3263],[3262,3261,3263],[3264,3265,3266],[3267,3268,3269],[3272,3273,3274],[3270,3271,3272],[3270,3272,3274],[3279,3280,3281],[3282,3283,3284],[3278,3279,3281],[3284,3275,3276],[3281,3282,3284],[3276,3277,3285],[3277,3278,3285],[3278,3281,3285],[3276,3284,3285],[3281,3284,3285],[3289,3286,3287],[3287,3288,3289],[3291,3292,3293],[3294,3295,3290],[3290,3291,3293],[3290,3293,3294],[3296,3297,3298],[3299,3300,3301],[3302,3303,3304],[3305,3306,3307],[3308,3309,3310],[3308,3310,3311`
++`],[3312,3313,3314],[3318,3315,3316],[3316,3317,3318],[3319,3320,3321],[3328,3327,3331],[3326,3327,3331],[3324,3325,3332],[3325,3326,3332],[3331,3326,3332],[3331,3328,3332],[3330,3329,3332],[3328,3329,3332],[3324,3323,3332],[3330,3322,3332],[3323,3322,3332],[3337,3333,3334],[3336,3337,3334],[3334,3335,3336],[3338,3339,3340],[3344,3345,3341],[3343,3344,3341],[3341,3342,3343],[3347,3348,3349],[3349,3350,3346],[3346,3347,3349],[3354,3355,3356],[3354,3356,3351],[3351,3352,3353],[3351,3353,3354],[3357`
++`,3358,3359],[3357,3359,3360],[3361,3362,3363],[3361,3363,3364],[3361,3364,3365],[3366,3367,3368],[3369,3370,3374],[3370,3371,3374],[3371,3372,3374],[3369,3373,3374],[3372,3373,3374],[3375,3376,3377],[3379,3380,3381],[3383,3384,3385],[3382,3383,3385],[3382,3385,3386],[3385,3378,3386],[3379,3378,3386],[3379,3381,3386],[3382,3381,3386],[3390,3387,3388],[3388,3389,3390],[3391,3392,3393],[3391,3393,3394],[3395,3396,3397],[3403,3404,3407],[3404,3405,3407],[3405,3402,3407],[3403,3402,3407],[3400,3401,3`
++`408],[3406,3398,3408],[3400,3399,3408],[3398,3399,3408],[3406,3405,3408],[3401,3402,3408],[3405,3402,3408],[3409,3410,3411],[3409,3411,3412],[3413,3414,3415],[3416,3417,3418],[3422,3416,3418],[3421,3422,3418],[3421,3418,3419],[3419,3420,3421],[3423,3424,3425],[3428,3429,3430],[3423,3425,3426],[3427,3428,3430],[3427,3430,3423],[3423,3426,3427],[3431,3432,3433],[3434,3435,3436],[3437,3431,3433],[3434,3436,3437],[3433,3434,3437],[3438,3439,3440],[3441,3442,3443],[3444,3445,3446],[3444,3446,3447],[3`
++`448,3449,3450],[3448,3450,3451],[3452,3453,3454],[3454,3455,3459],[3454,3452,3459],[3452,3458,3459],[3456,3457,3459],[3458,3457,3459],[3455,3456,3460],[3456,3459,3460],[3459,3455,3460],[3461,3462,3463],[3461,3463,3464],[3465,3466,3467],[3465,3467,3468],[3469,3470,3471],[3473,3474,3475],[3473,3475,3476],[3477,3469,3471],[3477,3471,3472],[3476,3477,3472],[3472,3473,3476],[3478,3479,3480],[3482,3483,3484],[3478,3480,3481],[3485,3478,3481],[3485,3481,3482],[3482,3484,3485],[3487,3488,3489],[3487,348`
++`9,3490],[3486,3487,3490],[3491,3492,3493],[3491,3493,3494],[3499,3495,3496],[3498,3499,3496],[3496,3497,3498],[3500,3501,3502],[3509,3510,3511],[3509,3511,3512],[3507,3508,3512],[3509,3508,3512],[3511,3506,3512],[3507,3506,3512],[3506,3511,3513],[3511,3503,3513],[3506,3505,3513],[3503,3504,3513],[3505,3504,3513],[3518,3519,3520],[3517,3518,3520],[3514,3515,3516],[3516,3517,3522],[3517,3520,3522],[3521,3520,3522],[3521,3514,3522],[3516,3514,3522],[3523,3524,3525],[3528,3523,3529],[3523,3525,3529]`
++`,[3526,3525,3529],[3526,3527,3529],[3528,3527,3529],[3530,3531,3532],[3536,3537,3538],[3535,3536,3539],[3533,3534,3539],[3535,3534,3539],[3536,3538,3539],[3533,3538,3539],[3540,3541,3542],[3547,3548,3549],[3547,3549,3550],[3543,3544,3545],[3546,3547,3550],[3543,3545,3546],[3543,3546,3550],[3558,3551,3552],[3555,3556,3557],[3554,3555,3557],[3558,3552,3553],[3558,3553,3554],[3554,3557,3558],[3563,3564,3565],[3562,3563,3565],[3565,3566,3559],[3562,3565,3559],[3560,3561,3567],[3561,3562,3567],[3562,`
++`3559,3567],[3560,3559,3567],[3568,3569,3570],[3571,3572,3573],[3571,3573,3574],[3577,3578,3579],[3580,3575,3576],[3579,3580,3576],[3576,3577,3579],[3583,3584,3585],[3587,3588,3589],[3587,3589,3590],[3585,3586,3590],[3587,3586,3590],[3585,3583,3590],[3583,3582,3590],[3589,3581,3590],[3582,3581,3590],[3591,3592,3593],[3599,3594,3595],[3595,3596,3600],[3596,3597,3600],[3597,3598,3600],[3595,3599,3600],[3598,3599,3600],[3603,3604,3605],[3602,3603,3605],[3601,3602,3605],[3608,3609,3610],[3608,3610,36`
++`11],[3612,3606,3607],[3612,3607,3608],[3608,3611,3612],[3624,3613,3614],[3623,3624,3614],[3615,3616,3617],[3620,3621,3622],[3623,3614,3615],[3623,3615,3617],[3617,3618,3625],[3622,3620,3625],[3618,3619,3625],[3620,3619,3625],[3622,3623,3626],[3625,3622,3626],[3623,3617,3626],[3625,3617,3626],[3630,3627,3628],[3628,3629,3630],[3631,3632,3633],[3638,3639,3640],[3638,3640,3641],[3638,3637,3641],[3635,3636,3641],[3637,3636,3641],[3640,3634,3641],[3635,3634,3641],[3642,3643,3644],[3642,3644,3645],[36`
++`49,3646,3647],[3647,3648,3649],[3653,3650,3651],[3651,3652,3653],[3657,3654,3655],[3655,3656,3657],[3660,3661,3662],[3660,3662,3663],[3664,3658,3665],[3658,3659,3665],[3659,3660,3665],[3664,3663,3665],[3660,3663,3665],[3666,3667,3668],[3670,3671,3672],[3669,3670,3672],[3673,3674,3675],[3678,3679,3680],[3680,3676,3677],[3677,3678,3680],[3682,3683,3684],[3681,3682,3684],[3681,3684,3685],[3693,3686,3687],[3692,3693,3687],[3690,3691,3692],[3687,3688,3689],[3692,3687,3689],[3689,3690,3692],[3697,3694`
++`,3695],[3695,3696,3697],[3703,3698,3699],[3703,3699,3700],[3702,3703,3700],[3700,3701,3702],[3705,3706,3711],[3707,3706,3711],[3707,3708,3711],[3709,3708,3711],[3705,3711,3712],[3710,3704,3712],[3705,3704,3712],[3711,3709,3712],[3710,3709,3712],[3713,3714,3715],[3713,3715,3716]],"meshes":[[0,4,0,2],[4,3,2,1],[7,8,3,6],[15,4,9,2],[19,3,11,1],[22,12,12,12],[34,3,24,1],[37,8,25,7],[45,5,32,3],[50,5,35,3],[55,3,38,1],[58,3,39,1],[61,8,40,6],[69,13,46,14],[82,3,60,1],[85,3,61,1],[88,4,62,2],[92,3,64,`
++`1],[95,3,65,1],[98,6,66,4],[104,3,70,1],[107,3,71,1],[110,4,72,2],[114,5,74,3],[119,3,77,1],[122,3,78,1],[125,5,79,3],[130,3,82,1],[133,7,83,5],[140,4,88,2],[144,5,90,3],[149,6,93,5],[155,5,98,3],[160,10,101,10],[170,4,111,2],[174,4,113,2],[178,5,115,3],[183,3,118,1],[186,3,119,1],[189,3,120,1],[192,7,121,6],[199,4,127,2],[203,4,129,2],[207,4,131,2],[211,5,133,3],[216,3,136,1],[219,3,137,1],[222,5,138,3],[227,3,141,1],[230,4,142,2],[234,3,144,1],[237,3,145,1],[240,4,146,2],[244,3,148,1],[247,3,1`
++`49,1],[250,6,150,4],[256,4,154,2],[260,3,156,1],[263,3,157,1],[266,6,158,4],[272,4,162,2],[276,5,164,3],[281,5,167,3],[286,4,170,2],[290,10,172,10],[300,17,182,19],[317,4,201,2],[321,6,203,5],[327,11,208,10],[338,5,218,4],[343,6,222,5],[349,3,227,1],[352,7,228,6],[359,4,234,2],[363,4,236,2],[367,4,238,2],[371,5,240,3],[376,6,243,4],[382,3,247,1],[385,3,248,1],[388,5,249,3],[393,6,252,4],[399,6,256,4],[405,3,260,1],[408,5,261,3],[413,4,264,2],[417,6,266,4],[423,4,270,2],[427,4,272,2],[431,5,274,3`
++`],[436,3,277,1],[439,3,278,1],[442,4,279,2],[446,3,281,1],[449,6,282,5],[455,4,287,2],[459,3,289,1],[462,3,290,1],[465,3,291,1],[468,6,292,4],[474,6,296,4],[480,3,300,1],[483,3,301,1],[486,3,302,1],[489,5,303,4],[494,4,307,2],[498,14,309,14],[512,4,323,2],[516,4,325,2],[520,5,327,3],[525,4,330,2],[529,3,332,1],[532,5,333,3],[537,5,336,3],[542,3,339,1],[545,9,340,9],[554,4,349,2],[558,4,351,2],[562,4,353,2],[566,4,355,2],[570,5,357,3],[575,4,360,2],[579,3,362,1],[582,4,363,2],[586,4,365,2],[590,8`
++`,367,6],[598,6,373,4],[604,6,377,5],[610,5,382,4],[615,3,386,1],[618,6,387,4],[624,5,391,3],[629,3,394,1],[632,3,395,1],[635,5,396,3],[640,4,399,2],[644,6,401,4],[650,6,405,4],[656,4,409,2],[660,6,411,5],[666,11,416,12],[677,3,428,1],[680,5,429,3],[685,3,432,1],[688,7,433,5],[695,14,438,14],[709,4,452,2],[713,3,454,1],[716,5,455,3],[721,5,458,3],[726,6,461,4],[732,3,465,1],[735,6,466,4],[741,4,470,2],[745,4,472,2],[749,3,474,1],[752,3,475,1],[755,4,476,2],[759,3,478,1],[762,4,479,2],[766,4,481,2`
++`],[770,3,483,1],[773,4,484,2],[777,3,486,1],[780,4,487,2],[784,6,489,4],[790,5,493,3],[795,3,496,1],[798,3,497,1],[801,3,498,1],[804,3,499,1],[807,3,500,1],[810,8,501,7],[818,3,508,1],[821,6,509,4],[827,5,513,3],[832,4,516,2],[836,3,518,1],[839,4,519,2],[843,3,521,1],[846,4,522,2],[850,6,524,4],[856,3,528,1],[859,3,529,1],[862,5,530,4],[867,6,534,4],[873,9,538,8],[882,3,546,1],[885,5,547,3],[890,4,550,2],[894,4,552,2],[898,3,554,1],[901,4,555,2],[905,3,557,1],[908,3,558,1],[911,4,559,2],[915,3,5`
++`61,1],[918,6,562,4],[924,5,566,3],[929,8,569,7],[937,8,576,7],[945,3,583,1],[948,6,584,4],[954,4,588,2],[958,3,590,1],[961,5,591,3],[966,4,594,2],[970,3,596,1],[973,5,597,3],[978,3,600,1],[981,4,601,2],[985,6,603,4],[991,7,607,5],[998,7,612,5],[1005,4,617,2],[1009,4,619,2],[1013,3,621,1],[1016,4,622,2],[1020,5,624,3],[1025,10,627,8],[1035,8,635,6],[1043,3,641,1],[1046,4,642,2],[1050,3,644,1],[1053,6,645,4],[1059,6,649,4],[1065,4,653,2],[1069,4,655,3],[1073,9,658,8],[1082,4,666,2],[1086,4,668,2],`
++`[1090,4,670,2],[1094,4,672,2],[1098,5,674,3],[1103,3,677,1],[1106,4,678,2],[1110,8,680,6],[1118,4,686,2],[1122,4,688,2],[1126,6,690,4],[1132,12,694,13],[1144,6,707,4],[1150,4,711,2],[1154,11,713,11],[1165,3,724,1],[1168,12,725,13],[1180,6,738,4],[1186,6,742,5],[1192,3,747,1],[1195,6,748,4],[1201,7,752,5],[1208,4,757,2],[1212,6,759,4],[1218,5,763,3],[1223,4,766,2],[1227,6,768,4],[1233,9,772,7],[1242,3,779,1],[1245,4,780,2],[1249,7,782,5],[1256,5,787,3],[1261,6,790,5],[1267,4,795,2],[1271,4,797,2]`
++`,[1275,4,799,2],[1279,4,801,2],[1283,4,803,2],[1287,5,805,3],[1292,5,808,3],[1297,4,811,2],[1301,4,813,2],[1305,4,815,2],[1309,4,817,2],[1313,5,819,3],[1318,6,822,5],[1324,4,827,2],[1328,8,829,7],[1336,4,836,2],[1340,7,838,5],[1347,9,843,8],[1356,3,851,1],[1359,6,852,4],[1365,4,856,2],[1369,7,858,5],[1376,4,863,2],[1380,7,865,5],[1387,3,870,1],[1390,4,871,2],[1394,3,873,1],[1397,6,874,4],[1403,9,878,8],[1412,11,886,11],[1423,5,897,3],[1428,3,900,1],[1431,6,901,4],[1437,3,905,1],[1440,3,906,1],[1`
++`443,5,907,4],[1448,11,911,12],[1459,4,923,2],[1463,5,925,3],[1468,4,928,2],[1472,5,930,3],[1477,5,933,3],[1482,4,936,2],[1486,4,938,2],[1490,3,940,1],[1493,3,941,1],[1496,5,942,3],[1501,4,945,2],[1505,4,947,2],[1509,4,949,2],[1513,5,951,3],[1518,3,954,1],[1521,3,955,1],[1524,4,956,2],[1528,3,958,1],[1531,4,959,2],[1535,5,961,3],[1540,4,964,2],[1544,6,966,4],[1550,3,970,1],[1553,6,971,4],[1559,5,975,3],[1564,6,978,4],[1570,8,982,7],[1578,3,989,1],[1581,12,990,13],[1593,14,1003,14],[1607,3,1017,1]`
++`,[1610,3,1018,1],[1613,3,1019,1],[1616,4,1020,2],[1620,10,1022,10],[1630,3,1032,1],[1633,4,1033,2],[1637,4,1035,2],[1641,3,1037,1],[1644,8,1038,6],[1652,3,1044,1],[1655,4,1045,2],[1659,3,1047,1],[1662,12,1048,14],[1674,4,1062,2],[1678,7,1064,5],[1685,3,1069,1],[1688,7,1070,5],[1695,8,1075,7],[1703,8,1082,6],[1711,5,1088,3],[1716,3,1091,1],[1719,6,1092,4],[1725,3,1096,1],[1728,3,1097,1],[1731,6,1098,5],[1737,4,1103,2],[1741,6,1105,4],[1747,8,1109,7],[1755,4,1116,2],[1759,4,1118,2],[1763,3,1120,1]`
++`,[1766,5,1121,3],[1771,8,1124,7],[1779,3,1131,1],[1782,6,1132,4],[1788,5,1136,3],[1793,3,1139,1],[1796,10,1140,9],[1806,3,1149,1],[1809,6,1150,4],[1815,6,1154,4],[1821,8,1158,7],[1829,8,1165,6],[1837,4,1171,2],[1841,4,1173,2],[1845,3,1175,1],[1848,4,1176,2],[1852,3,1178,1],[1855,5,1179,3],[1860,5,1182,3],[1865,3,1185,1],[1868,3,1186,1],[1871,4,1187,2],[1875,11,1189,11],[1886,7,1200,6],[1893,3,1206,1],[1896,5,1207,3],[1901,6,1210,4],[1907,4,1214,2],[1911,4,1216,2],[1915,3,1218,1],[1918,3,1219,1],`
++`[1921,4,1220,2],[1925,8,1222,6],[1933,4,1228,2],[1937,4,1230,2],[1941,6,1232,4],[1947,3,1236,1],[1950,8,1237,8],[1958,3,1245,1],[1961,6,1246,4],[1967,5,1250,3],[1972,4,1253,2],[1976,3,1255,1],[1979,3,1256,1],[1982,7,1257,5],[1989,6,1262,4],[1995,3,1266,1],[1998,3,1267,1],[2001,5,1268,3],[2006,4,1271,2],[2010,4,1273,2],[2014,4,1275,2],[2018,6,1277,4],[2024,3,1281,1],[2027,3,1282,1],[2030,3,1283,1],[2033,7,1284,6],[2040,6,1290,4],[2046,3,1294,1],[2049,9,1295,7],[2058,5,1302,3],[2063,3,1305,1],[206`
++`6,10,1306,9],[2076,3,1315,1],[2079,3,1316,1],[2082,6,1317,4],[2088,3,1321,1],[2091,5,1322,3],[2096,4,1325,2],[2100,4,1327,2],[2104,6,1329,4],[2110,4,1333,2],[2114,4,1335,2],[2118,3,1337,1],[2121,5,1338,3],[2126,3,1341,1],[2129,5,1342,3],[2134,7,1345,7],[2141,6,1352,4],[2147,3,1356,1],[2150,3,1357,1],[2153,8,1358,6],[2161,5,1364,4],[2166,8,1368,7],[2174,13,1375,13],[2187,4,1388,2],[2191,4,1390,2],[2195,3,1392,1],[2198,4,1393,2],[2202,5,1395,3],[2207,11,1398,10],[2218,8,1408,6],[2226,7,1414,5],[22`
++`33,9,1419,8],[2242,3,1427,1],[2245,7,1428,5],[2252,4,1433,2],[2256,5,1435,3],[2261,3,1438,1],[2264,5,1439,3],[2269,3,1442,1],[2272,6,1443,4],[2278,4,1447,2],[2282,4,1449,2],[2286,6,1451,4],[2292,4,1455,2],[2296,5,1457,3],[2301,4,1460,2],[2305,6,1462,4],[2311,4,1466,2],[2315,3,1468,1],[2318,5,1469,3],[2323,6,1472,4],[2329,4,1476,2],[2333,6,1478,4],[2339,4,1482,2],[2343,3,1484,1],[2346,5,1485,3],[2351,3,1488,1],[2354,3,1489,1],[2357,3,1490,1],[2360,5,1491,3],[2365,4,1494,2],[2369,3,1496,1],[2372,5`
++`,1497,3],[2377,3,1500,1],[2380,6,1501,4],[2386,3,1505,1],[2389,6,1506,4],[2395,3,1510,1],[2398,14,1511,13],[2412,4,1524,2],[2416,3,1526,1],[2419,5,1527,3],[2424,5,1530,3],[2429,7,1533,6],[2436,3,1539,1],[2439,9,1540,8],[2448,4,1548,2],[2452,15,1550,17],[2467,5,1567,3],[2472,4,1570,2],[2476,4,1572,2],[2480,7,1574,5],[2487,4,1579,2],[2491,3,1581,1],[2494,4,1582,2],[2498,3,1584,1],[2501,4,1585,2],[2505,3,1587,1],[2508,6,1588,4],[2514,3,1592,1],[2517,8,1593,7],[2525,5,1600,3],[2530,5,1603,3],[2535,4`
++`,1606,2],[2539,5,1608,3],[2544,3,1611,1],[2547,3,1612,1],[2550,3,1613,1],[2553,6,1614,4],[2559,4,1618,2],[2563,3,1620,1],[2566,4,1621,2],[2570,3,1623,1],[2573,5,1624,3],[2578,5,1627,3],[2583,4,1630,2],[2587,3,1632,1],[2590,8,1633,6],[2598,4,1639,2],[2602,3,1641,1],[2605,4,1642,2],[2609,3,1644,1],[2612,10,1645,10],[2622,4,1655,2],[2626,4,1657,2],[2630,3,1659,1],[2633,6,1660,4],[2639,11,1664,11],[2650,3,1675,1],[2653,3,1676,1],[2656,4,1677,2],[2660,5,1679,3],[2665,3,1682,1],[2668,5,1683,3],[2673,3`
++`,1686,1],[2676,3,1687,1],[2679,3,1688,1],[2682,6,1689,4],[2688,3,1693,1],[2691,3,1694,1],[2694,3,1695,1],[2697,6,1696,4],[2703,5,1700,3],[2708,3,1703,1],[2711,3,1704,1],[2714,7,1705,5],[2721,8,1710,6],[2729,3,1716,1],[2732,4,1717,2],[2736,5,1719,3],[2741,4,1722,2],[2745,4,1724,2],[2749,4,1726,2],[2753,6,1728,4],[2759,4,1732,2],[2763,4,1734,2],[2767,4,1736,2],[2771,4,1738,2],[2775,3,1740,1],[2778,4,1741,2],[2782,3,1743,1],[2785,3,1744,1],[2788,6,1745,4],[2794,6,1749,4],[2800,4,1753,2],[2804,5,175`
++`5,3],[2809,3,1758,1],[2812,6,1759,4],[2818,4,1763,2],[2822,3,1765,1],[2825,6,1766,4],[2831,6,1770,4],[2837,3,1774,1],[2840,6,1775,4],[2846,3,1779,1],[2849,4,1780,2],[2853,6,1782,4],[2859,4,1786,2],[2863,4,1788,2],[2867,4,1790,2],[2871,6,1792,4],[2877,11,1796,12],[2888,5,1808,3],[2893,4,1811,2],[2897,3,1813,1],[2900,3,1814,1],[2903,4,1815,2],[2907,3,1817,1],[2910,4,1818,2],[2914,3,1820,1],[2917,3,1821,1],[2920,4,1822,2],[2924,3,1824,1],[2927,3,1825,1],[2930,4,1826,2],[2934,3,1828,1],[2937,3,1829,`
++`1],[2940,6,1830,4],[2946,4,1834,2],[2950,4,1836,2],[2954,3,1838,1],[2957,3,1839,1],[2960,6,1840,4],[2966,5,1844,3],[2971,4,1847,2],[2975,6,1849,5],[2981,4,1854,2],[2985,4,1856,2],[2989,3,1858,1],[2992,4,1859,2],[2996,4,1861,2],[3000,4,1863,2],[3004,6,1865,4],[3010,5,1869,3],[3015,5,1872,3],[3020,9,1875,8],[3029,8,1883,7],[3037,4,1890,2],[3041,3,1892,1],[3044,6,1893,4],[3050,3,1897,1],[3053,4,1898,2],[3057,6,1900,4],[3063,6,1904,4],[3069,4,1908,2],[3073,4,1910,2],[3077,4,1912,2],[3081,3,1914,1],[`
++`3084,5,1915,3],[3089,3,1918,1],[3092,5,1919,3],[3097,3,1922,1],[3100,3,1923,1],[3103,8,1924,7],[3111,6,1931,4],[3117,4,1935,2],[3121,4,1937,2],[3125,4,1939,2],[3129,4,1941,2],[3133,5,1943,3],[3138,6,1946,4],[3144,9,1950,8],[3153,4,1958,2],[3157,6,1960,4],[3163,5,1964,3],[3168,5,1967,3],[3173,6,1970,4],[3179,4,1974,2],[3183,5,1976,3],[3188,4,1979,2],[3192,3,1981,1],[3195,5,1982,3],[3200,5,1985,3],[3205,4,1988,2],[3209,4,1990,2],[3213,5,1992,3],[3218,3,1995,1],[3221,5,1996,3],[3226,5,1999,3],[3231`
++`,3,2002,1],[3234,3,2003,1],[3237,4,2004,2],[3241,7,2006,5],[3248,4,2011,2],[3252,5,2013,3],[3257,7,2016,6],[3264,3,2022,1],[3267,3,2023,1],[3270,5,2024,3],[3275,11,2027,10],[3286,4,2037,2],[3290,6,2039,4],[3296,3,2043,1],[3299,3,2044,1],[3302,3,2045,1],[3305,3,2046,1],[3308,4,2047,2],[3312,3,2049,1],[3315,4,2050,2],[3319,3,2052,1],[3322,11,2053,11],[3333,5,2064,3],[3338,3,2067,1],[3341,5,2068,3],[3346,5,2071,3],[3351,6,2074,4],[3357,4,2078,2],[3361,5,2080,3],[3366,3,2083,1],[3369,6,2084,5],[3375`
++`,3,2089,1],[3378,9,2090,8],[3387,4,2098,2],[3391,4,2100,2],[3395,3,2102,1],[3398,11,2103,11],[3409,4,2114,2],[3413,3,2116,1],[3416,7,2117,5],[3423,8,2122,6],[3431,7,2128,5],[3438,3,2133,1],[3441,3,2134,1],[3444,4,2135,2],[3448,4,2137,2],[3452,9,2139,9],[3461,4,2148,2],[3465,4,2150,2],[3469,9,2152,7],[3478,8,2159,6],[3486,5,2165,3],[3491,4,2168,2],[3495,5,2170,3],[3500,3,2173,1],[3503,11,2174,11],[3514,9,2185,8],[3523,7,2193,6],[3530,3,2199,1],[3533,7,2200,6],[3540,3,2206,1],[3543,8,2207,6],[3551`
++`,8,2213,6],[3559,9,2219,8],[3568,3,2227,1],[3571,4,2228,2],[3575,6,2230,4],[3581,10,2234,9],[3591,3,2243,1],[3594,7,2244,6],[3601,5,2250,3],[3606,7,2253,5],[3613,14,2258,14],[3627,4,2272,2],[3631,3,2274,1],[3634,8,2275,7],[3642,4,2282,2],[3646,4,2284,2],[3650,4,2286,2],[3654,4,2288,2],[3658,8,2290,7],[3666,3,2297,1],[3669,4,2298,2],[3673,3,2300,1],[3676,5,2301,3],[3681,5,2304,3],[3686,8,2307,6],[3694,4,2313,2],[3698,6,2315,4],[3704,9,2319,9],[3713,4,2328,2]],"triTopoly":[0,0,1,2,2,2,2,2,2,3,3,4,`
++`5,5,5,5,5,5,5,5,5,5,5,5,6,7,7,7,7,7,7,7,8,8,8,9,9,9,10,11,12,12,12,12,12,12,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,15,16,16,17,18,19,19,19,19,20,21,22,22,23,23,23,24,25,26,26,26,27,28,28,28,28,28,29,29,30,30,30,31,31,31,31,31,32,32,32,33,33,33,33,33,33,33,33,33,33,34,34,35,35,36,36,36,37,38,39,40,40,40,40,40,40,41,41,42,42,43,43,44,44,44,45,46,47,47,47,48,49,49,50,51,52,52,53,54,55,55,55,55,56,56,57,58,59,59,59,59,60,60,61,61,61,62,62,62,63,63,64,64,64,64,64,64,64,64,64,64,65,65,65,65,65,6`
++`5,65,65,65,65,65,65,65,65,65,65,65,65,65,66,66,67,67,67,67,67,68,68,68,68,68,68,68,68,68,68,69,69,69,69,70,70,70,70,70,71,72,72,72,72,72,72,73,73,74,74,75,75,76,76,76,77,77,77,77,78,79,80,80,80,81,81,81,81,82,82,82,82,83,84,84,84,85,85,86,86,86,86,87,87,88,88,89,89,89,90,91,92,92,93,94,94,94,94,94,95,95,96,97,98,99,99,99,99,100,100,100,100,101,102,103,104,104,104,104,105,105,106,106,106,106,106,106,106,106,106,106,106,106,106,106,107,107,108,108,109,109,109,110,110,111,112,112,112,113,113,113,11`
++`4,115,115,115,115,115,115,115,115,115,116,116,117,117,118,118,119,119,120,120,120,121,121,122,123,123,124,124,125,125,125,125,125,125,126,126,126,126,127,127,127,127,127,128,128,128,128,129,130,130,130,130,131,131,131,132,133,134,134,134,135,135,136,136,136,136,137,137,137,137,138,138,139,139,139,139,139,140,140,140,140,140,140,140,140,140,140,140,140,141,142,142,142,143,144,144,144,144,144,145,145,145,145,145,145,145,145,145,145,145,145,145,145,146,146,147,148,148,148,149,149,149,150,150,150,15`
++`0,151,152,152,152,152,153,153,154,154,155,156,157,157,158,159,159,160,160,161,162,162,163,164,164,165,165,165,165,166,166,166,167,168,169,170,171,172,172,172,172,172,172,172,173,174,174,174,174,175,175,175,176,176,177,178,178,179,180,180,181,181,181,181,182,183,184,184,184,184,185,185,185,185,186,186,186,186,186,186,186,186,187,188,188,188,189,189,190,190,191,192,192,193,194,195,195,196,197,197,197,197,198,198,198,199,199,199,199,199,199,199,200,200,200,200,200,200,200,201,202,202,202,202,203,20`
++`3,204,205,205,205,206,206,207,208,208,208,209,210,210,211,211,211,211,212,212,212,212,212,213,213,213,213,213,214,214,215,215,216,217,217,218,218,218,219,219,219,219,219,219,219,219,220,220,220,220,220,220,221,222,222,223,224,224,224,224,225,225,225,225,226,226,227,227,227,228,228,228,228,228,228,228,228,229,229,230,230,231,231,232,232,233,233,233,234,235,235,236,236,236,236,236,236,237,237,238,238,239,239,239,239,240,240,240,240,240,240,240,240,240,240,240,240,240,241,241,241,241,242,242,243,24`
++`3,243,243,243,243,243,243,243,243,243,244,245,245,245,245,245,245,245,245,245,245,245,245,245,246,246,246,246,247,247,247,247,247,248,249,249,249,249,250,250,250,250,250,251,251,252,252,252,252,253,253,253,254,254,255,255,255,255,256,256,256,256,256,256,256,257,258,258,259,259,259,259,259,260,260,260,261,261,261,261,261,262,262,263,263,264,264,265,265,266,266,267,267,267,268,268,268,269,269,270,270,271,271,272,272,273,273,273,274,274,274,274,274,275,275,276,276,276,276,276,276,276,277,277,278,27`
++`8,278,278,278,279,279,279,279,279,279,279,279,280,281,281,281,281,282,282,283,283,283,283,283,284,284,285,285,285,285,285,286,287,287,288,289,289,289,289,290,290,290,290,290,290,290,290,291,291,291,291,291,291,291,291,291,291,291,292,292,292,293,294,294,294,294,295,296,297,297,297,297,298,298,298,298,298,298,298,298,298,298,298,298,299,299,300,300,300,301,301,302,302,302,303,303,303,304,304,305,305,306,307,308,308,308,309,309,310,310,311,311,312,312,312,313,314,315,315,316,317,317,318,318,318,31`
++`9,319,320,320,320,320,321,322,322,322,322,323,323,323,324,324,324,324,325,325,325,325,325,325,325,326,327,327,327,327,327,327,327,327,327,327,327,327,327,328,328,328,328,328,328,328,328,328,328,328,328,328,328,329,330,331,332,332,333,333,333,333,333,333,333,333,333,333,334,335,335,336,336,337,338,338,338,338,338,338,339,340,340,341,342,342,342,342,342,342,342,342,342,342,342,342,342,342,343,343,344,344,344,344,344,345,346,346,346,346,346,347,347,347,347,347,347,347,348,348,348,348,348,348,349,34`
++`9,349,350,351,351,351,351,352,353,354,354,354,354,354,355,355,356,356,356,356,357,357,357,357,357,357,357,358,358,359,359,360,361,361,361,362,362,362,362,362,362,362,363,364,364,364,364,365,365,365,366,367,367,367,367,367,367,367,367,367,368,369,369,369,369,370,370,370,370,371,371,371,371,371,371,371,372,372,372,372,372,372,373,373,374,374,375,376,376,377,378,378,378,379,379,379,380,381,382,382,383,383,383,383,383,383,383,383,383,383,383,384,384,384,384,384,384,385,386,386,386,387,387,387,387,38`
++`8,388,389,389,390,391,392,392,393,393,393,393,393,393,394,394,395,395,396,396,396,396,397,398,398,398,398,398,398,398,398,399,400,400,400,400,401,401,401,402,402,403,404,405,405,405,405,405,406,406,406,406,407,408,409,409,409,410,410,411,411,412,412,413,413,413,413,414,415,416,417,417,417,417,417,417,418,418,418,418,419,420,420,420,420,420,420,420,421,421,421,422,423,423,423,423,423,423,423,423,423,424,425,426,426,426,426,427,428,428,428,429,429,430,430,431,431,431,431,432,432,433,433,434,435,43`
++`5,435,436,437,437,437,438,438,438,438,438,438,438,439,439,439,439,440,441,442,442,442,442,442,442,443,443,443,443,444,444,444,444,444,444,444,445,445,445,445,445,445,445,445,445,445,445,445,445,446,446,447,447,448,449,449,450,450,450,451,451,451,451,451,451,451,451,451,451,452,452,452,452,452,452,453,453,453,453,453,454,454,454,454,454,454,454,454,455,456,456,456,456,456,457,457,458,458,458,459,460,460,460,461,462,462,462,462,463,463,464,464,465,465,465,465,466,466,467,467,467,468,468,469,469,46`
++`9,469,470,470,471,472,472,472,473,473,473,473,474,474,475,475,475,475,476,476,477,478,478,478,479,480,481,482,482,482,483,483,484,485,485,485,486,487,487,487,487,488,489,489,489,489,490,491,491,491,491,491,491,491,491,491,491,491,491,491,492,492,493,494,494,494,495,495,495,496,496,496,496,496,496,497,498,498,498,498,498,498,498,498,499,499,500,500,500,500,500,500,500,500,500,500,500,500,500,500,500,500,500,501,501,501,502,502,503,503,504,504,504,504,504,505,505,506,507,507,508,509,509,510,511,51`
++`1,511,511,512,513,513,513,513,513,513,513,514,514,514,515,515,515,516,516,517,517,517,518,519,520,521,521,521,521,522,522,523,524,524,525,526,526,526,527,527,527,528,528,529,530,530,530,530,530,530,531,531,532,533,533,534,535,535,535,535,535,535,535,535,535,535,536,536,537,537,538,539,539,539,539,540,540,540,540,540,540,540,540,540,540,540,541,542,543,543,544,544,544,545,546,546,546,547,548,549,550,550,550,550,551,552,553,554,554,554,554,555,555,555,556,557,558,558,558,558,558,559,559,559,559,55`
++`9,559,560,561,561,562,562,562,563,563,564,564,565,565,566,566,566,566,567,567,568,568,569,569,570,570,571,572,572,573,574,575,575,575,575,576,576,576,576,577,577,578,578,578,579,580,580,580,580,581,581,582,583,583,583,583,584,584,584,584,585,586,586,586,586,587,588,588,589,589,589,589,590,590,591,591,592,592,593,593,593,593,594,594,594,594,594,594,594,594,594,594,594,594,595,595,595,596,596,597,598,599,599,600,601,601,602,603,604,604,605,606,607,607,608,609,610,610,610,610,611,611,612,612,613,61`
++`4,615,615,615,615,616,616,616,617,617,618,618,618,618,618,619,619,620,620,621,622,622,623,623,624,624,625,625,625,625,626,626,626,627,627,627,628,628,628,628,628,628,628,628,629,629,629,629,629,629,629,630,630,631,632,632,632,632,633,634,634,635,635,635,635,636,636,636,636,637,637,638,638,639,639,640,641,641,641,642,643,643,643,644,645,646,646,646,646,646,646,646,647,647,647,647,648,648,649,649,650,650,651,651,652,652,652,653,653,653,653,654,654,654,654,654,654,654,654,655,655,656,656,656,656,65`
++`7,657,657,658,658,658,659,659,659,659,660,660,661,661,661,662,662,663,664,664,664,665,665,665,666,666,667,667,668,668,668,669,670,670,670,671,671,671,672,673,674,674,675,675,675,675,675,676,676,677,677,677,678,678,678,678,678,678,679,680,681,681,681,682,682,682,682,682,682,682,682,682,682,683,683,684,684,684,684,685,686,687,688,689,689,690,691,691,692,693,693,693,693,693,693,693,693,693,693,693,694,694,694,695,696,696,696,697,697,697,698,698,698,698,699,699,700,700,700,701,702,702,702,702,702,70`
++`3,704,704,704,704,704,704,704,704,705,705,706,706,707,708,708,708,708,708,708,708,708,708,708,708,709,709,710,711,711,711,711,711,712,712,712,712,712,712,713,713,713,713,713,714,715,716,716,717,717,718,718,718,718,718,718,718,718,718,719,719,720,720,721,721,721,721,721,721,721,722,722,722,722,722,722,723,723,723,724,724,725,725,725,726,727,727,727,727,727,727,727,727,727,727,727,728,728,728,728,728,728,728,728,729,729,729,729,729,729,730,731,731,731,731,731,731,732,733,733,733,733,733,733,734,73`
++`4,734,734,734,734,735,735,735,735,735,735,735,735,736,737,737,738,738,738,738,739,739,739,739,739,739,739,739,739,740,741,741,741,741,741,741,742,742,742,743,743,743,743,743,744,744,744,744,744,744,744,744,744,744,744,744,744,744,745,745,746,747,747,747,747,747,747,747,748,748,749,749,750,750,751,751,752,752,752,752,752,752,752,753,754,754,755,756,756,756,757,757,757,758,758,758,758,758,758,759,759,760,760,760,760,761,761,761,761,761,761,761,761,761,762,762]},"links":[{"PolyA":0,"PolyB":5,"PosA"`
++`:{"x":-2129,"y":-1057,"z":129},"PosB":{"x":-2123,"y":-1045,"z":128},"cost":null,"type":0},{"PolyA":4,"PolyB":106,"PosA":{"x":-2037.8,"y":-861.4,"z":116},"PosB":{"x":-2033,"y":-871,"z":160},"cost":null,"type":1},{"PolyA":8,"PolyB":131,"PosA":{"x":-1796.6923076923076,"y":-648.5384615384615,"z":129},"PosB":{"x":-1793,"y":-643,"z":158},"cost":null,"type":1},{"PolyA":23,"PolyB":34,"PosA":{"x":-2081,"y":2417,"z":20.483870967741936},"PosB":{"x":-2081,"y":2429,"z":65},"cost":null,"type":1},{"PolyA":26,"`
++`PolyB":117,"PosA":{"x":-1871,"y":2459,"z":22},"PosB":{"x":-1859,"y":2459,"z":65},"cost":null,"type":1},{"PolyA":37,"PolyB":119,"PosA":{"x":-1826.923076923077,"y":2625.3846153846152,"z":33},"PosB":{"x":-1835,"y":2627,"z":78},"cost":null,"type":1},{"PolyA":37,"PolyB":121,"PosA":{"x":-1805,"y":2645,"z":32},"PosB":{"x":-1805,"y":2657,"z":77},"cost":null,"type":1},{"PolyA":47,"PolyB":146,"PosA":{"x":-1793,"y":2765,"z":32.5},"PosB":{"x":-1787,"y":2771,"z":77},"cost":null,"type":1},{"PolyA":48,"PolyB":`
++`107,"PosA":{"x":-2003,"y":3065,"z":33},"PosB":{"x":-2003,"y":3053,"z":72},"cost":null,"type":1},{"PolyA":50,"PolyB":118,"PosA":{"x":-1757,"y":2807,"z":33},"PosB":{"x":-1745,"y":2807,"z":63.31884057971015},"cost":null,"type":1},{"PolyA":58,"PolyB":63,"PosA":{"x":-2093,"y":2813,"z":33.666666666666664},"PosB":{"x":-2093,"y":2825,"z":90},"cost":null,"type":1},{"PolyA":66,"PolyB":73,"PosA":{"x":-2057,"y":491,"z":32},"PosB":{"x":-2057,"y":515,"z":63},"cost":null,"type":1},{"PolyA":66,"PolyB":70,"PosA"`
++`:{"x":-2057,"y":491,"z":32},"PosB":{"x":-2045,"y":503,"z":12},"cost":null,"type":1},{"PolyA":67,"PolyB":134,"PosA":{"x":-1727,"y":-115,"z":32},"PosB":{"x":-1696.4,"y":-104.8,"z":8},"cost":null,"type":1},{"PolyA":70,"PolyB":140,"PosA":{"x":-1793,"y":497,"z":18},"PosB":{"x":-1781,"y":509,"z":33},"cost":null,"type":1},{"PolyA":73,"PolyB":76,"PosA":{"x":-1793,"y":533,"z":61},"PosB":{"x":-1793,"y":545,"z":32},"cost":null,"type":1},{"PolyA":73,"PolyB":109,"PosA":{"x":-1847,"y":533,"z":61.4090909090909`
++`1},"PosB":{"x":-1847,"y":539,"z":106},"cost":null,"type":1},{"PolyA":79,"PolyB":230,"PosA":{"x":-1319,"y":545,"z":36},"PosB":{"x":-1319,"y":533,"z":59},"cost":null,"type":1},{"PolyA":86,"PolyB":120,"PosA":{"x":-1847,"y":1259,"z":32.666666666666664},"PosB":{"x":-1835,"y":1259,"z":71},"cost":null,"type":1},{"PolyA":107,"PolyB":108,"PosA":{"x":-1937,"y":3023,"z":71.16666666666667},"PosB":{"x":-1925,"y":3023,"z":106},"cost":null,"type":1},{"PolyA":116,"PolyB":117,"PosA":{"x":-1763,"y":2423,"z":102},`
++`"PosB":{"x":-1762.1669793621013,"y":2432.579737335835,"z":63},"cost":null,"type":1},{"PolyA":118,"PolyB":146,"PosA":{"x":-1745,"y":2771,"z":63.492753623188406},"PosB":{"x":-1763,"y":2771,"z":77},"cost":null,"type":1},{"PolyA":119,"PolyB":121,"PosA":{"x":-1835,"y":2651,"z":78},"PosB":{"x":-1829,"y":2657,"z":77},"cost":null,"type":0},{"PolyA":124,"PolyB":187,"PosA":{"x":-1697,"y":-229,"z":164},"PosB":{"x":-1679,"y":-247,"z":128},"cost":null,"type":1},{"PolyA":125,"PolyB":226,"PosA":{"x":-1613,"y":`
++`-163,"z":164},"PosB":{"x":-1595,"y":-163,"z":174},"cost":null,"type":0},{"PolyA":130,"PolyB":190,"PosA":{"x":-1415,"y":-151,"z":159},"PosB":{"x":-1415,"y":-163,"z":130},"cost":null,"type":1},{"PolyA":130,"PolyB":229,"PosA":{"x":-1559,"y":-151,"z":162.63636363636363},"PosB":{"x":-1559,"y":-187,"z":175},"cost":null,"type":0},{"PolyA":134,"PolyB":252,"PosA":{"x":-1487,"y":-73,"z":8},"PosB":{"x":-1463,"y":-73,"z":69},"cost":null,"type":1},{"PolyA":148,"PolyB":223,"PosA":{"x":-1616.345132743363,"y":1`
++`663.1769911504425,"z":2},"PosB":{"x":-1613,"y":1667,"z":59},"cost":null,"type":1},{"PolyA":152,"PolyB":212,"PosA":{"x":-1691,"y":1847,"z":0.6666666666666667},"PosB":{"x":-1679,"y":1847,"z":37},"cost":null,"type":1},{"PolyA":153,"PolyB":265,"PosA":{"x":-1374.655172413793,"y":2322.862068965517,"z":0.3448275862068966},"PosB":{"x":-1373,"y":2327,"z":45},"cost":null,"type":1},{"PolyA":156,"PolyB":228,"PosA":{"x":-1493,"y":1877,"z":0},"PosB":{"x":-1505,"y":1877,"z":26},"cost":null,"type":1},{"PolyA":1`
++`57,"PolyB":249,"PosA":{"x":-1485.8,"y":2581.4,"z":3},"PosB":{"x":-1481,"y":2591,"z":46},"cost":null,"type":1},{"PolyA":174,"PolyB":180,"PosA":{"x":-1265,"y":-253,"z":162},"PosB":{"x":-1253.7058823529412,"y":-255.8235294117647,"z":128.88235294117646},"cost":null,"type":1},{"PolyA":176,"PolyB":226,"PosA":{"x":-1595,"y":-199,"z":130},"PosB":{"x":-1595,"y":-187,"z":175},"cost":null,"type":1},{"PolyA":176,"PolyB":229,"PosA":{"x":-1563.8,"y":-213.4,"z":130},"PosB":{"x":-1559,"y":-211,"z":175},"cost":n`
++`ull,"type":1},{"PolyA":181,"PolyB":334,"PosA":{"x":-1010,"y":-202,"z":128.16666666666666},"PosB":{"x":-1001,"y":-193,"z":145},"cost":null,"type":1},{"PolyA":185,"PolyB":328,"PosA":{"x":-1046,"y":-412,"z":129},"PosB":{"x":-1043,"y":-421,"z":165},"cost":null,"type":1},{"PolyA":202,"PolyB":225,"PosA":{"x":-1535.3243243243244,"y":2775.054054054054,"z":7},"PosB":{"x":-1547,"y":2777,"z":64},"cost":null,"type":1},{"PolyA":211,"PolyB":212,"PosA":{"x":-1637,"y":1865,"z":53},"PosB":{"x":-1667,"y":1865,"z"`
++`:36},"cost":null,"type":1},{"PolyA":213,"PolyB":227,"PosA":{"x":-1583,"y":1901,"z":52},"PosB":{"x":-1578.2,"y":1910.6,"z":39.8},"cost":null,"type":0},{"PolyA":217,"PolyB":231,"PosA":{"x":-1535,"y":1703,"z":234},"PosB":{"x":-1505,"y":1709,"z":170},"cost":null,"type":1},{"PolyA":218,"PolyB":220,"PosA":{"x":-1355,"y":1763,"z":232},"PosB":{"x":-1355,"y":1751,"z":260},"cost":null,"type":1},{"PolyA":226,"PolyB":229,"PosA":{"x":-1571,"y":-181,"z":175},"PosB":{"x":-1559,"y":-187,"z":175},"cost":null,"ty`
++`pe":0},{"PolyA":232,"PolyB":263,"PosA":{"x":-1385,"y":1877,"z":169},"PosB":{"x":-1373,"y":1895,"z":232},"cost":null,"type":1},{"PolyA":233,"PolyB":245,"PosA":{"x":-1193,"y":1151,"z":32},"PosB":{"x":-1193,"y":1139,"z":-8},"cost":null,"type":1},{"PolyA":234,"PolyB":267,"PosA":{"x":-1333.4705882352941,"y":1178.8823529411766,"z":33},"PosB":{"x":-1325,"y":1181,"z":69},"cost":null,"type":1},{"PolyA":241,"PolyB":305,"PosA":{"x":-1067.5207547169812,"y":1439.022641509434,"z":-111.98867924528302},"PosB":{`
++`"x":-1067,"y":1451,"z":-76},"cost":null,"type":1},{"PolyA":248,"PolyB":258,"PosA":{"x":-1466,"y":2648,"z":60.75},"PosB":{"x":-1457,"y":2639,"z":107},"cost":null,"type":1},{"PolyA":250,"PolyB":252,"PosA":{"x":-1444.5384615384614,"y":-105.3076923076923,"z":85.6923076923077},"PosB":{"x":-1457,"y":-97,"z":69},"cost":null,"type":1},{"PolyA":256,"PolyB":297,"PosA":{"x":-1235,"y":2711,"z":114},"PosB":{"x":-1223,"y":2711,"z":88},"cost":null,"type":1},{"PolyA":264,"PolyB":269,"PosA":{"x":-1343,"y":2081,"`
++`z":232},"PosB":{"x":-1343,"y":2111,"z":232},"cost":null,"type":0},{"PolyA":264,"PolyB":274,"PosA":{"x":-1343,"y":2081,"z":232},"PosB":{"x":-1331,"y":2081,"z":275},"cost":null,"type":1},{"PolyA":266,"PolyB":303,"PosA":{"x":-1291.6065573770493,"y":1218.327868852459,"z":70},"PosB":{"x":-1277,"y":1217,"z":104},"cost":null,"type":1},{"PolyA":269,"PolyB":274,"PosA":{"x":-1325,"y":2111,"z":232},"PosB":{"x":-1325,"y":2105,"z":271},"cost":null,"type":1},{"PolyA":269,"PolyB":275,"PosA":{"x":-1332.13513513`
++`51352,"y":2206.189189189189,"z":232},"PosB":{"x":-1331,"y":2213,"z":275},"cost":null,"type":1},{"PolyA":269,"PolyB":302,"PosA":{"x":-1301,"y":2111,"z":232},"PosB":{"x":-1301,"y":2081,"z":232},"cost":null,"type":0},{"PolyA":269,"PolyB":270,"PosA":{"x":-1337,"y":2207,"z":232},"PosB":{"x":-1341.32,"y":2237.24,"z":232},"cost":null,"type":0},{"PolyA":270,"PolyB":275,"PosA":{"x":-1332.08,"y":2238.56,"z":232},"PosB":{"x":-1331,"y":2231,"z":275},"cost":null,"type":1},{"PolyA":270,"PolyB":299,"PosA":{"x"`
++`:-1332.1351351351352,"y":2326.189189189189,"z":232},"PosB":{"x":-1331,"y":2333,"z":270},"cost":null,"type":1},{"PolyA":271,"PolyB":299,"PosA":{"x":-1331,"y":2369,"z":230},"PosB":{"x":-1331,"y":2357,"z":267},"cost":null,"type":1},{"PolyA":271,"PolyB":300,"PosA":{"x":-1332.1351351351352,"y":2458.189189189189,"z":228},"PosB":{"x":-1331,"y":2465,"z":260},"cost":null,"type":1},{"PolyA":272,"PolyB":300,"PosA":{"x":-1332.08,"y":2496.56,"z":227},"PosB":{"x":-1331,"y":2489,"z":249},"cost":null,"type":1},`
++`{"PolyA":272,"PolyB":301,"PosA":{"x":-1333.1081081081081,"y":2584.3513513513512,"z":225},"PosB":{"x":-1331,"y":2597,"z":267},"cost":null,"type":1},{"PolyA":273,"PolyB":301,"PosA":{"x":-1332.08,"y":2622.56,"z":224},"PosB":{"x":-1331,"y":2615,"z":267},"cost":null,"type":1},{"PolyA":274,"PolyB":302,"PosA":{"x":-1307,"y":2087,"z":272},"PosB":{"x":-1301,"y":2081,"z":232},"cost":null,"type":1},{"PolyA":276,"PolyB":281,"PosA":{"x":-839,"y":2495,"z":-64},"PosB":{"x":-857,"y":2519,"z":-41},"cost":null,"t`
++`ype":1},{"PolyA":284,"PolyB":309,"PosA":{"x":-1181,"y":2063,"z":9},"PosB":{"x":-1174.136,"y":2061.752,"z":40},"cost":null,"type":1},{"PolyA":288,"PolyB":311,"PosA":{"x":-1117.076923076923,"y":2154.6153846153848,"z":-2.3076923076923075},"PosB":{"x":-1109,"y":2153,"z":43},"cost":null,"type":1},{"PolyA":297,"PolyB":312,"PosA":{"x":-1109,"y":2711,"z":89},"PosB":{"x":-1097,"y":2711,"z":139},"cost":null,"type":1},{"PolyA":309,"PolyB":310,"PosA":{"x":-1139,"y":2057,"z":40},"PosB":{"x":-1127,"y":2057,"z`
++`":64},"cost":null,"type":1},{"PolyA":309,"PolyB":311,"PosA":{"x":-1139,"y":2123,"z":39},"PosB":{"x":-1109,"y":2129,"z":43},"cost":null,"type":0},{"PolyA":310,"PolyB":311,"PosA":{"x":-1109,"y":2117,"z":65},"PosB":{"x":-1109,"y":2129,"z":43},"cost":null,"type":1},{"PolyA":335,"PolyB":336,"PosA":{"x":-416.96923076923076,"y":-1031.246153846154,"z":104.98461538461538},"PosB":{"x":-431,"y":-1033,"z":128},"cost":null,"type":1},{"PolyA":342,"PolyB":450,"PosA":{"x":-329,"y":-649,"z":64.49565217391304},"P`
++`osB":{"x":-329,"y":-637,"z":102},"cost":null,"type":1},{"PolyA":342,"PolyB":468,"PosA":{"x":-197,"y":-649,"z":49},"PosB":{"x":-179,"y":-637,"z":62},"cost":null,"type":0},{"PolyA":343,"PolyB":369,"PosA":{"x":-743,"y":2597,"z":98},"PosB":{"x":-727.6497461928934,"y":2595.903553299492,"z":39.88324873096447},"cost":null,"type":1},{"PolyA":347,"PolyB":398,"PosA":{"x":-605,"y":2567,"z":-84},"PosB":{"x":-588.68,"y":2579.24,"z":-84.48},"cost":null,"type":0},{"PolyA":360,"PolyB":373,"PosA":{"x":-689,"y":2`
++`45,"z":8},"PosB":{"x":-689,"y":233,"z":57},"cost":null,"type":1},{"PolyA":369,"PolyB":388,"PosA":{"x":-605,"y":2537,"z":40},"PosB":{"x":-593,"y":2525,"z":-18},"cost":null,"type":1},{"PolyA":370,"PolyB":442,"PosA":{"x":-359,"y":2507,"z":26},"PosB":{"x":-365,"y":2501,"z":-18},"cost":null,"type":1},{"PolyA":376,"PolyB":464,"PosA":{"x":-243.8,"y":541.4,"z":-1},"PosB":{"x":-239,"y":551,"z":44},"cost":null,"type":1},{"PolyA":381,"PolyB":463,"PosA":{"x":-239,"y":743,"z":0},"PosB":{"x":-233,"y":767,"z":`
++`31},"cost":null,"type":1},{"PolyA":388,"PolyB":390,"PosA":{"x":-588.2,"y":2522.6,"z":-7.6},"PosB":{"x":-575,"y":2549,"z":8},"cost":null,"type":1},{"PolyA":389,"PolyB":445,"PosA":{"x":-515,"y":2489,"z":21},"PosB":{"x":-479,"y":2489,"z":1},"cost":null,"type":1},{"PolyA":395,"PolyB":442,"PosA":{"x":-377,"y":2537,"z":-87.5},"PosB":{"x":-377,"y":2513,"z":-28},"cost":null,"type":1},{"PolyA":424,"PolyB":447,"PosA":{"x":-443.45882352941175,"y":2447.035294117647,"z":-88},"PosB":{"x":-443,"y":2453,"z":-32`
++`},"cost":null,"type":1},{"PolyA":429,"PolyB":450,"PosA":{"x":-341,"y":-637,"z":141},"PosB":{"x":-329,"y":-637,"z":102},"cost":null,"type":1},{"PolyA":439,"PolyB":448,"PosA":{"x":-466.53846153846155,"y":-136.69230769230768,"z":107.96153846153847},"PosB":{"x":-455,"y":-139,"z":69},"cost":null,"type":1},{"PolyA":439,"PolyB":440,"PosA":{"x":-455,"y":-79,"z":107},"PosB":{"x":-450.2,"y":-76.6,"z":69},"cost":null,"type":1},{"PolyA":440,"PolyB":448,"PosA":{"x":-449,"y":-79,"z":69},"PosB":{"x":-443,"y":-`
++`91,"z":69},"cost":null,"type":0},{"PolyA":445,"PolyB":447,"PosA":{"x":-413,"y":2471,"z":-10},"PosB":{"x":-413,"y":2459,"z":-24},"cost":null,"type":1},{"PolyA":449,"PolyB":463,"PosA":{"x":-269,"y":1379,"z":-29},"PosB":{"x":-257,"y":1379,"z":30},"cost":null,"type":1},{"PolyA":450,"PolyB":468,"PosA":{"x":-191,"y":-637,"z":103},"PosB":{"x":-179,"y":-637,"z":62},"cost":null,"type":1},{"PolyA":451,"PolyB":518,"PosA":{"x":151,"y":-1147,"z":0},"PosB":{"x":163,"y":-1147,"z":40},"cost":null,"type":1},{"Po`
++`lyA":455,"PolyB":531,"PosA":{"x":205,"y":455,"z":0.3333333333333333},"PosB":{"x":217,"y":455,"z":45},"cost":null,"type":1},{"PolyA":463,"PolyB":465,"PosA":{"x":-233,"y":1529,"z":31},"PosB":{"x":-221,"y":1529,"z":1},"cost":null,"type":1},{"PolyA":476,"PolyB":516,"PosA":{"x":139.8470588235294,"y":-174.01176470588234,"z":8.83529411764706},"PosB":{"x":139,"y":-163,"z":44},"cost":null,"type":1},{"PolyA":477,"PolyB":568,"PosA":{"x":349,"y":-595,"z":0},"PosB":{"x":349,"y":-607,"z":49},"cost":null,"type`
++`":1},{"PolyA":502,"PolyB":515,"PosA":{"x":146.55172413793105,"y":86.62068965517241,"z":8.53448275862069},"PosB":{"x":145,"y":83,"z":53},"cost":null,"type":1},{"PolyA":504,"PolyB":627,"PosA":{"x":673,"y":53,"z":-0.16666666666666663},"PosB":{"x":673,"y":41,"z":34},"cost":null,"type":1},{"PolyA":516,"PolyB":517,"PosA":{"x":147.07692307692307,"y":-101.38461538461539,"z":44},"PosB":{"x":145,"y":-91,"z":79},"cost":null,"type":1},{"PolyA":535,"PolyB":537,"PosA":{"x":409,"y":1649,"z":23},"PosB":{"x":421`
++`,"y":1649,"z":3.0526315789473686},"cost":null,"type":1},{"PolyA":541,"PolyB":570,"PosA":{"x":428.2,"y":2042.6,"z":96},"PosB":{"x":433,"y":2033,"z":132},"cost":null,"type":1},{"PolyA":547,"PolyB":588,"PosA":{"x":518.2,"y":2432.6,"z":96},"PosB":{"x":523,"y":2423,"z":126},"cost":null,"type":1},{"PolyA":548,"PolyB":588,"PosA":{"x":511,"y":2051,"z":96},"PosB":{"x":523,"y":2057,"z":126},"cost":null,"type":1},{"PolyA":552,"PolyB":578,"PosA":{"x":550.6,"y":2619.8,"z":95},"PosB":{"x":541,"y":2615,"z":131`
++`},"cost":null,"type":1},{"PolyA":553,"PolyB":595,"PosA":{"x":523,"y":2555,"z":96},"PosB":{"x":535,"y":2555,"z":138},"cost":null,"type":1},{"PolyA":558,"PolyB":564,"PosA":{"x":403,"y":2717,"z":99.33333333333333},"PosB":{"x":397,"y":2723,"z":138},"cost":null,"type":1},{"PolyA":578,"PolyB":595,"PosA":{"x":541,"y":2585,"z":131},"PosB":{"x":541,"y":2573,"z":138},"cost":null,"type":0},{"PolyA":586,"PolyB":598,"PosA":{"x":787,"y":2459,"z":138},"PosB":{"x":796.6,"y":2463.8,"z":96},"cost":null,"type":1},`
++`{"PolyA":587,"PolyB":697,"PosA":{"x":1261,"y":2477,"z":127},"PosB":{"x":1243,"y":2471,"z":97},"cost":null,"type":1},{"PolyA":587,"PolyB":705,"PosA":{"x":1259.4594594594594,"y":2543.2432432432433,"z":126.48648648648648},"PosB":{"x":1249,"y":2543,"z":170},"cost":null,"type":1},{"PolyA":588,"PolyB":596,"PosA":{"x":546.7913846153846,"y":2387.108923076923,"z":125.03476923076923},"PosB":{"x":553,"y":2387,"z":65},"cost":null,"type":1},{"PolyA":589,"PolyB":683,"PosA":{"x":1009,"y":2423,"z":125.142857142`
++`85714},"PosB":{"x":1009,"y":2435,"z":168},"cost":null,"type":1},{"PolyA":590,"PolyB":745,"PosA":{"x":1280.6921856406188,"y":2423.145180483935,"z":124.71796905989687},"PosB":{"x":1291,"y":2423,"z":88},"cost":null,"type":1},{"PolyA":594,"PolyB":637,"PosA":{"x":643,"y":2285,"z":-80.9655172413793},"PosB":{"x":643,"y":2297,"z":-43},"cost":null,"type":1},{"PolyA":596,"PolyB":630,"PosA":{"x":605.5405405405405,"y":2359.7567567567567,"z":65},"PosB":{"x":607,"y":2351,"z":28},"cost":null,"type":1},{"PolyA"`
++`:596,"PolyB":620,"PosA":{"x":557.8648648648649,"y":2351.810810810811,"z":65},"PosB":{"x":559,"y":2345,"z":28},"cost":null,"type":1},{"PolyA":601,"PolyB":663,"PosA":{"x":835,"y":2735,"z":96},"PosB":{"x":841,"y":2729,"z":121},"cost":null,"type":1},{"PolyA":601,"PolyB":664,"PosA":{"x":835,"y":2735,"z":96},"PosB":{"x":865,"y":2717,"z":142},"cost":null,"type":1},{"PolyA":619,"PolyB":620,"PosA":{"x":559,"y":2321,"z":-29},"PosB":{"x":559,"y":2333,"z":28},"cost":null,"type":1},{"PolyA":619,"PolyB":630,"`
++`PosA":{"x":631,"y":2321,"z":-12},"PosB":{"x":631,"y":2333,"z":28},"cost":null,"type":1},{"PolyA":619,"PolyB":637,"PosA":{"x":631,"y":2297,"z":-12},"PosB":{"x":643,"y":2297,"z":-43},"cost":null,"type":1},{"PolyA":619,"PolyB":638,"PosA":{"x":631,"y":2321,"z":-12},"PosB":{"x":643,"y":2333,"z":-1},"cost":null,"type":0},{"PolyA":620,"PolyB":630,"PosA":{"x":589,"y":2333,"z":28},"PosB":{"x":607,"y":2333,"z":28},"cost":null,"type":0},{"PolyA":621,"PolyB":624,"PosA":{"x":625,"y":-61,"z":45},"PosB":{"x":6`
++`43,"y":-85,"z":59},"cost":null,"type":1},{"PolyA":630,"PolyB":638,"PosA":{"x":631,"y":2333,"z":28},"PosB":{"x":643,"y":2333,"z":-1},"cost":null,"type":1},{"PolyA":633,"PolyB":662,"PosA":{"x":846.5384615384615,"y":818.6923076923077,"z":0},"PosB":{"x":841,"y":815,"z":46},"cost":null,"type":1},{"PolyA":637,"PolyB":638,"PosA":{"x":643,"y":2321,"z":-43},"PosB":{"x":643,"y":2333,"z":-1},"cost":null,"type":1},{"PolyA":638,"PolyB":639,"PosA":{"x":714.5384615384615,"y":2360.6923076923076,"z":21.615384615`
++`384617},"PosB":{"x":703,"y":2363,"z":5},"cost":null,"type":1},{"PolyA":638,"PolyB":648,"PosA":{"x":715,"y":2363,"z":23},"PosB":{"x":745,"y":2363,"z":26},"cost":null,"type":0},{"PolyA":638,"PolyB":642,"PosA":{"x":709,"y":2333,"z":5},"PosB":{"x":721,"y":2333,"z":-54.5},"cost":null,"type":1},{"PolyA":649,"PolyB":653,"PosA":{"x":743.2162162162163,"y":1113.7027027027027,"z":118.70270270270271},"PosB":{"x":751,"y":1115,"z":150},"cost":null,"type":1},{"PolyA":658,"PolyB":684,"PosA":{"x":997,"y":2519,"z`
++`":96},"PosB":{"x":1009,"y":2519,"z":152},"cost":null,"type":1},{"PolyA":663,"PolyB":664,"PosA":{"x":841,"y":2699,"z":122},"PosB":{"x":865,"y":2699,"z":141.25},"cost":null,"type":1},{"PolyA":668,"PolyB":676,"PosA":{"x":979,"y":1205,"z":0},"PosB":{"x":967,"y":1205,"z":36},"cost":null,"type":1},{"PolyA":673,"PolyB":719,"PosA":{"x":1237,"y":725,"z":8},"PosB":{"x":1249,"y":725,"z":30.916666666666668},"cost":null,"type":1},{"PolyA":678,"PolyB":719,"PosA":{"x":1237,"y":329,"z":10.275862068965518},"PosB`
++`":{"x":1249,"y":329,"z":30},"cost":null,"type":1},{"PolyA":683,"PolyB":684,"PosA":{"x":1069,"y":2495,"z":168},"PosB":{"x":1069,"y":2507,"z":152},"cost":null,"type":1},{"PolyA":687,"PolyB":748,"PosA":{"x":1291,"y":2819,"z":123},"PosB":{"x":1299.3076923076924,"y":2831.4615384615386,"z":166.46153846153845},"cost":null,"type":1},{"PolyA":701,"PolyB":749,"PosA":{"x":1333,"y":2867,"z":121},"PosB":{"x":1333,"y":2855,"z":160},"cost":null,"type":1},{"PolyA":724,"PolyB":756,"PosA":{"x":1754.56,"y":1941.92`
++`,"z":2.26},"PosB":{"x":1747,"y":1943,"z":36},"cost":null,"type":1},{"PolyA":733,"PolyB":762,"PosA":{"x":1721.2162162162163,"y":999.7027027027027,"z":1},"PosB":{"x":1729,"y":1001,"z":64},"cost":null,"type":1},{"PolyA":733,"PolyB":751,"PosA":{"x":1591,"y":779,"z":-8.333333333333334},"PosB":{"x":1591,"y":767,"z":54},"cost":null,"type":1},{"PolyA":748,"PolyB":749,"PosA":{"x":1309,"y":2855,"z":166},"PosB":{"x":1333,"y":2855,"z":160},"cost":null,"type":0},{"PolyA":750,"PolyB":751,"PosA":{"x":1591,"y":`
++`707,"z":77},"PosB":{"x":1591,"y":719,"z":54},"cost":null,"type":1},{"PolyA":750,"PolyB":752,"PosA":{"x":1615,"y":329,"z":77},"PosB":{"x":1627,"y":329,"z":54.34615384615385},"cost":null,"type":1},{"PolyA":753,"PolyB":755,"PosA":{"x":1651,"y":2033,"z":44},"PosB":{"x":1669,"y":2015,"z":59},"cost":null,"type":1}]}`;
 
-        if (polyid >= polyPath.length) return;
-        const h = this._getHeightOnDetail(polyPath[polyid].id, pos);
-        out.push({
-            pos: { x: pos.x, y: pos.y, z: h },
-            mode: 1
-        });
-    }
-    /**
-     * @param {{pos:{x:number,y:number,z:number},mode:number}[]} funnelPath
-     * @param {{id:number,mode:number}[]} polyPath
-     */
-    fixHeight(funnelPath,polyPath) {
-        if (funnelPath.length === 0) return [];
-
-        const result = [];
-        let polyIndex = 0;
-
-        for (let i = 0; i < funnelPath.length - 1; i++) {
-            const curr = funnelPath[i];
-            const next = funnelPath[i + 1];
-
-            // 跳点：直接输出，不插值
-            if (next.mode == 2) {
-                result.push(curr);
-                continue;
-            }
-            if(curr.mode == 2)result.push(curr);
-            // 分段采样
-            const samples = this._subdivide(curr.pos, next.pos);
-            let preh=curr.pos.z;
-            let prep=curr;
-            for (let j = (curr.mode == 2)?1:0; j < samples.length; j++) {
-                const p = samples[j];
-                // 跳过重复首点
-                //if (result.length > 0) {
-                //    const last = result[result.length - 1].pos;
-                //    if (posDistance2Dsqr(last, p) < 1e-4) continue;
-                //}
-                const preid=polyIndex;
-                // 推进 poly corridor
-                while (polyIndex < polyPath.length &&!this._pointInPolyXY(p, polyPath[polyIndex].id))polyIndex++;
-
-                if (polyIndex >= polyPath.length) break;
-                //如果这个样本点比前一个点高度发生足够变化，就在中间加入一个样本点
-                const h = this._getHeightOnDetail(polyPath[polyIndex].id, p);
-                if(j>0&&Math.abs(preh-h)>5)
-                {
-                    const mid={x:(p.x+prep.pos.x)/2,y:(p.y+prep.pos.y)/2,z:p.z};
-                    this.addpoint(mid,preid,polyPath,result);
-                }
-                result.push({
-                    pos: { x: p.x, y: p.y, z: h },
-                    mode: 1
-                });
-                preh=h;
-                prep=result[result.length - 1];
-            }
-        }
-
-        // 最后一个点
-        result.push(funnelPath[funnelPath.length - 1]);
-        return result;
-    }
-
-    /* ===============================
-       Subdivide
-    =============================== */
-
-    /**
-     * @param {{ x: any; y: any; z: any; }} a
-     * @param {{ x: any; y: any; z?: number; }} b
-     */
-    _subdivide(a, b) {
-        const out = [];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.hypot(dx, dy);
-
-        if (dist <= this.stepSize) {
-            out.push(a);
-            return out;
-        }
-
-        const n = Math.floor(dist / this.stepSize);
-        for (let i = 0; i < n; i++) {
-            const t = i / n;
-            out.push({
-                x: a.x + dx * t,
-                y: a.y + dy * t,
-                z: a.z
-            });
-        }
-        return out;
-    }
-
-    /* ===============================
-       Height Query
-    =============================== */
-
-    /**
-     * @param {number} polyId
-     * @param {{ z: number; y: number; x: number; }} p
-     */
-    _getHeightOnDetail(polyId, p) {
-        const { verts, tris } = this.detailMesh;
-        const start = this.polyTriStart[polyId];
-        const end   = this.polyTriEnd[polyId];
-        if(this.polyHasDetail[polyId]==0)return p.z;
-        const px = p.x;
-        const py = p.y;
-        for (let i = start; i < end; i++) {
-            if (
-                px < this.triAabbMinX[i] || px > this.triAabbMaxX[i] ||
-                py < this.triAabbMinY[i] || py > this.triAabbMaxY[i]
-            ) {
-                continue;
-            }
-            const [a, b, c] = tris[i];
-            const va = verts[a];
-            const vb = verts[b];
-            const vc = verts[c];
-
-            if (this._pointInTriXY(p, va, vb, vc)) {
-                return this._baryHeight(p, va, vb, vc);
-            }
-        }
-
-        // fallback（极少发生）
-    return p.z;
-    }
-
-    /**
-     * @param {{ x: number; y: number; }} p
-     * @param {{ x: any; y: any; z: any; }} a
-     * @param {{ x: any; y: any; z: any; }} b
-     * @param {{ x: any; y: any; z: any; }} c
-     */
-    _baryHeight(p, a, b, c) {
-        const v0x = b.x - a.x, v0y = b.y - a.y;
-        const v1x = c.x - a.x, v1y = c.y - a.y;
-        const v2x = p.x - a.x, v2y = p.y - a.y;
-
-        const d00 = v0x * v0x + v0y * v0y;
-        const d01 = v0x * v1x + v0y * v1y;
-        const d11 = v1x * v1x + v1y * v1y;
-        const d20 = v2x * v0x + v2y * v0y;
-        const d21 = v2x * v1x + v2y * v1y;
-
-        const denom = d00 * d11 - d01 * d01;
-        const v = (d11 * d20 - d01 * d21) / denom;
-        const w = (d00 * d21 - d01 * d20) / denom;
-        const u = 1.0 - v - w;
-
-        return u * a.z + v * b.z + w * c.z;
-    }
-
-    /* ===============================
-       Geometry helpers
-    =============================== */
-
-    /**
-     * @param {{ y: number; x: number; }} p
-     * @param {number} polyId
-     */
-    _pointInPolyXY(p, polyId) {
-        const poly = this.navMesh.polys[polyId];
-        let inside = false;
-
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-            const vi = this.navMesh.verts[poly[i]];
-            const vj = this.navMesh.verts[poly[j]];
-
-            if (
-                ((vi.y > p.y) !== (vj.y > p.y)) &&
-                (p.x < (vj.x - vi.x) * (p.y - vi.y) / (vj.y - vi.y) + vi.x)
-            ) {
-                inside = !inside;
-            }
-        }
-        return inside;
-    }
-
-    /**
-     * @param {{ y: number; x: number; }} p
-     * @param {{ x: number; y: number;}} a
-     * @param {{ x: number; y: number;}} b
-     * @param {{ x: number; y: number;}} c
-     */
-    _pointInTriXY(p, a, b, c) {
-        const s = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
-        const t = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-        const u = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
-        return (s >= 0 && t >= 0 && u >= 0) || (s <= 0 && t <= 0 && u <= 0);
     }
 }
 
@@ -4487,6 +1502,7 @@ class NavMesh {
      * @param {number} [duration]
      */
     debug(duration = 5) {
+        this.debugLoad(30);
     }
     debugLoad(duration = 5) {
         for (let pi = 0; pi < this.mesh.polys.length; pi++) {
@@ -4570,58 +1586,12 @@ class NavMesh {
         }
     }
     init() {
-        {
-            let start = new Date();
-            //创建世界网格
-            this.hf = new OpenHeightfield();
-            this.hf.init();
-            this.hf.findcanwalk();
-            this.hf.deleteboundary();
-            let end = new Date();
-            Instance.Msg(`网格生成完成,耗时${end.getTime() - start.getTime()}ms`);
-            //return;
-            //分割区域
-            start = new Date();
-            this.regionGen = new RegionGenerator(this.hf);
-            this.regionGen.init();
-            end = new Date();
-            Instance.Msg(`区域生成完成,耗时${end.getTime() - start.getTime()}ms`);
-            //return;
-            //轮廓生成
-            start = new Date();
-            this.contourBuilder = new ContourBuilder(this.hf);
-            this.contourBuilder.init();
-            end = new Date();
-            Instance.Msg(`轮廓生成完成,耗时${end.getTime() - start.getTime()}ms`);
-            //return;
-            //生成多边形网格
-            start = new Date();
-            this.polyMeshGenerator = new PolyMeshBuilder(this.contourBuilder.contours);
-            this.polyMeshGenerator.init();
-            this.mesh = this.polyMeshGenerator.return();
-            end = new Date();
-            Instance.Msg(`多边形生成完成,耗时${end.getTime() - start.getTime()}ms`);
-            //return;
-
-            //构建细节网格
-            start = new Date();
-            this.polidetail = new PolyMeshDetailBuilder(this.mesh, this.hf);
-            this.meshdetail = this.polidetail.init();
-            end = new Date();
-            Instance.Msg(`细节多边形生成完成,耗时${end.getTime() - start.getTime()}ms`);
-
-            //return;
-            start = new Date();
-            this.jumplinkbuilder=new JumpLinkBuilder(this.mesh);
-            this.links=this.jumplinkbuilder.init();
-            end = new Date();
-            Instance.Msg(`跳点生成完成,耗时${end.getTime() - start.getTime()}ms`);
-        }
+        this.importNavData(new StaticData().Data);
 
         //构建A*寻路
-        this.astar = new PolyGraphAStar(this.mesh,this.links);
-        this.funnel = new FunnelPath(this.mesh, this.astar.centers,this.links);
         this.heightfixer=new FunnelHeightFixer(this.mesh,this.meshdetail,ADJUST_HEIGHT_DISTANCE);
+        this.astar = new PolyGraphAStar(this.mesh,this.links,this.heightfixer);
+        this.funnel = new FunnelPath(this.mesh, this.astar.centers,this.links);
     }
     /**
      * 输入起点终点，返回世界坐标路径点
@@ -4630,16 +1600,23 @@ class NavMesh {
      * @returns {{pos:{x:number,y:number,z:number},mode:number}[]}
      */
     findPath(start, end) {
+        //Instance.DebugLine({start,end,duration:1,color:{r:0,g:255,b:0}});
+        //Instance.Msg(`start:     x:${start.x},y:${start.y},z:${start.z}     end:     x:${end.x},y:${end.y},z:${end.z}`);
+        //Instance.Msg("\n\n");
         const polyPath=this.astar.findPath(start,end);
-
-        if (!polyPath || polyPath.length === 0) return [];
-        const funnelPath = this.funnel.build(polyPath, start, end);
-        const ans=this.heightfixer.fixHeight(funnelPath,polyPath);
-        //this.debugDrawPolyPath(polyPath, 1 / 2);
-        this.debugDrawfunnelPath(funnelPath,1/2);
+        //Instance.Msg("astar:"+polyPath.path.length);
+        //this.debugDrawPolyPath(polyPath.path, 1);
+        if (!polyPath || polyPath.path.length === 0) return [];
+        const funnelPath = this.funnel.build(polyPath.path, polyPath.start, polyPath.end);
+        //Instance.Msg("funnel:"+funnelPath.length);
+        //this.debugDrawfunnelPath(funnelPath,1/1);
+        const ans=this.heightfixer.fixHeight(funnelPath,polyPath.path);
+        //Instance.DebugSphere({center:polyPath.start,radius:1,duration:1});
+        //Instance.DebugSphere({center:polyPath.end,radius:1,duration:1});
+        //Instance.Msg("heightfixer:"+ans.length);
+        if (!ans || ans.length === 0) return [];
         this.debugDrawPath(ans,1/2);
 
-        //无后台
         //多边形总数：1025跳点数：162
         //100次A*           68ms
         //100次funnelPath   74ms-68=6ms
@@ -4695,26 +1672,48 @@ class NavMesh {
      * @param {{pos:{x:number,y:number,z:number},mode:number}[]} path
      */
     debugDrawPath(path, duration = 10) {
-        if (!path || path.length < 2) {
-            Instance.Msg("No path to draw");
-            return;
-        }
         const color = {
-            r: Math.floor(255),
+            r: Math.floor(0),
             g: Math.floor(0),
-            b: Math.floor(0),
+            b: Math.floor(255),
         };
         const colorJ = {
             r: Math.floor(255),
             g: Math.floor(255),
             b: Math.floor(0),
         };
+        if (!path||path.length==2) {
+            if(path.length==2)
+            {
+                Instance.DebugSphere({
+                    center: { x: path[0].pos.x, y: path[0].pos.y, z: path[0].pos.z },
+                    radius: 3,
+                    color: { r: 0, g: 0, b: 255 },
+                    duration
+                });
+                Instance.DebugLine({
+                    start: { x: path[0].pos.x, y: path[0].pos.y, z: path[0].pos.z },
+                    end: { x: path[1].pos.x, y: path[1].pos.y, z: path[1].pos.z },
+                    color:path[1].mode==2?colorJ:color,
+                    duration
+                });
+
+                Instance.DebugSphere({
+                    center: { x: path[1].pos.x, y: path[1].pos.y, z: path[1].pos.z },
+                    radius: 3,
+                    color:path[1].mode==2?colorJ:color,
+                    duration
+                });
+            }
+            else Instance.Msg("No path to draw");
+            return;
+        }
 
         const last = path[0].pos;
         Instance.DebugSphere({
             center: { x: last.x, y: last.y, z: last.z },
             radius: 3,
-            color: { r: 255, g: 0, b: 0 },
+            color: { r: 0, g: 0, b: 255 },
             duration
         });
         for (let i = 1; i < path.length; i++) {
@@ -4754,6 +1753,7 @@ class NavMesh {
             b: Math.floor(100 + Math.random() * 155),
         };
         for (const pi of polyPath) {
+            Instance.Msg(pi.id);
             const poly = this.mesh.polys[pi.id];
 
             // poly 中心
