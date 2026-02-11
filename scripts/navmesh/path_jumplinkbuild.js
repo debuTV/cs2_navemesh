@@ -1,5 +1,6 @@
 import { Instance } from "cs_script/point_script";
-import { MAX_JUMP_HEIGHT, MAX_WALK_HEIGHT, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, posDistance2Dsqr, posDistance3Dsqr } from "./path_const";
+import { MAX_JUMP_HEIGHT, MAX_WALK_HEIGHT, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z } from "./path_const";
+import { vec } from "../util/vector";
 
 export class JumpLinkBuilder
 {
@@ -75,7 +76,7 @@ export class JumpLinkBuilder
         // 检查线段是否退化成点
         if (a <= EPSILON && e <= EPSILON) {
             // 两个都是点
-            return { distSq: posDistance2Dsqr(p1, p3), ptA: p1, ptB: p3 };
+            return { dist: vec.length2D(p1, p3), ptA: p1, ptB: p3 };
         }
         
         let s, t;
@@ -130,7 +131,7 @@ export class JumpLinkBuilder
         };
 
         return {
-            distSq: posDistance2Dsqr(ptA, ptB),
+            dist: vec.length2D(ptA, ptB),
             ptA,
             ptB
         };
@@ -164,9 +165,9 @@ export class JumpLinkBuilder
                 // 如果计算失败（平行重叠等极端情况），跳过
                 if (!closestResult) continue;
 
-                const { distSq, ptA, ptB } = closestResult;
+                const { dist, ptA, ptB } = closestResult;
                 // 5. 距离判断
-                if (distSq > this.jumpDist * this.jumpDist) continue;
+                if (dist > this.jumpDist) continue;
 
                 //如果a和b在同一个可行走区域，并且没有跳跃的捷径，就跳过
                 if(this.islandIds[edgeA.polyIndex] === this.islandIds[edgeB.polyIndex]&&Math.abs(ptA.z-ptB.z)<=this.walkHeight)continue;
@@ -174,10 +175,10 @@ export class JumpLinkBuilder
                 const heightDiff = Math.abs(ptA.z - ptB.z);
                 if (heightDiff > this.jumpHeight) continue;
                 //同一点跳过
-                if (heightDiff <1&&distSq < 1) continue;
+                if (heightDiff <1&&dist < 1) continue;
                 //Instance.DebugLine({start:ptA,end:ptB,duration:60,color:{r:255,g:0,b:0}});
                 // 6. 记录候选
-                this.updateBestCandidate(bestJumpPerPoly, edgeA.polyIndex, edgeB.polyIndex, distSq, ptA, ptB);
+                this.updateBestCandidate(bestJumpPerPoly, edgeA.polyIndex, edgeB.polyIndex, dist, ptA, ptB);
             }
         }
         // 3. 根据 linkdist 过滤掉靠得太近的跳点
@@ -201,10 +202,10 @@ export class JumpLinkBuilder
                     (islandA === exIslandB && islandB === exIslandA)) {
                     
                     // 检查起点或终点的欧几里得距离是否小于 linkdist
-                    const dSqStart = posDistance3Dsqr(cand.startPos, existing.PosA);
-                    const dSqEnd = posDistance3Dsqr(cand.endPos, existing.PosB);
+                    const dSqStart = vec.length(cand.startPos, existing.PosA);
+                    const dSqEnd = vec.length(cand.endPos, existing.PosB);
 
-                    if (dSqStart < this.linkdist * this.linkdist || dSqEnd < this.linkdist * this.linkdist) {
+                    if (dSqStart < this.linkdist || dSqEnd < this.linkdist) {
                         tooClose = true;
                         break;
                     }
@@ -262,11 +263,11 @@ export class JumpLinkBuilder
      * @param {Map<string,any>} map
      * @param {number} idxA
      * @param {number} idxB
-     * @param {number} distSq 两个多边形边界边之间的最短平方距离
+     * @param {number} dist 两个多边形边界边之间的最短平方距离
      * @param {import("cs_script/point_script").Vector} ptA
      * @param {import("cs_script/point_script").Vector} ptB
      */
-    updateBestCandidate(map, idxA, idxB, distSq, ptA, ptB) {
+    updateBestCandidate(map, idxA, idxB, dist, ptA, ptB) {
         //检查是否已经记录过这个多边形的跳跃目标
         const id1 = Math.min(idxA, idxB);
         const id2 = Math.max(idxA, idxB);
@@ -274,11 +275,11 @@ export class JumpLinkBuilder
 
         const existing = map.get(key);
         //如果还没有记录，或者发现了一个更近的目标（distSq 更小）
-        if (!existing || distSq < existing.distSq) {
+        if (!existing || dist < existing.dist) {
             map.set(key, {
                 startPoly: idxA,
                 endPoly: idxB,
-                distSq: distSq,
+                dist: dist,
                 startPos: { ...ptA },
                 endPos: { ...ptB }
             });

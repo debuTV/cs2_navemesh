@@ -1,16 +1,19 @@
 import { Instance } from "cs_script/point_script";
-import { ASTAR_HEURISTIC_SCALE, ASTAR_OPTIMIZATION_1, closestPointOnPoly } from "./path_const";
+import { ASTAR_HEURISTIC_SCALE, ASTAR_OPTIMIZATION_1, closestPointOnPoly, MAX_JUMP_HEIGHT, MESH_CELL_SIZE_Z } from "./path_const";
+import { FunnelHeightFixer } from "./path_funnelheightfixer";
 
 export class PolyGraphAStar {
     /**
      * @param {{verts: {x: number;y: number;z: number;}[];polys: number[][];regions: number[];neighbors: number[][];}} polys
-     * @param {{ PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number; type: number; }[]} links
+     * @param {{PolyA: number;PolyB: number;PosA: import("cs_script/point_script").Vector;PosB: import("cs_script/point_script").Vector;cost: number;type: number;}[]} links
+     * @param {FunnelHeightFixer} heightfixer
      */
-    constructor(polys, links) {
+    constructor(polys, links, heightfixer) {
         this.mesh = polys;
         this.polyCount = polys.polys.length;
         /**@type {Map<number,{PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number; type: number;}[]>} */
         this.links = new Map();
+        this.heightfixer = heightfixer;
         for (const link of links) {
             const polyA = link.PolyA;
             const polyB = link.PolyB;
@@ -61,19 +64,18 @@ export class PolyGraphAStar {
      * @param {import("cs_script/point_script").Vector} end
      */
     findPath(start, end) {
-        const startPoly = this.findContainingPoly(start);
-        const endPoly = this.findContainingPoly(end);
-
-        //Instance.Msg(startPoly+"   "+endPoly);
-        if (startPoly < 0 || endPoly < 0) {
+        const startPoly = this.findNearestPoly(start);
+        const endPoly = this.findNearestPoly(end);
+        //Instance.Msg(startPoly.poly+"   "+endPoly.poly);
+        if (startPoly.poly < 0 || endPoly.poly < 0) {
             Instance.Msg(`跑那里去了?`);
-            return [];
+            return { start: startPoly.pos, end: endPoly.pos, path: [] };
         }
 
         if (startPoly == endPoly) {
-            return [{ id: endPoly, mode: 1 }];
+            return { start: startPoly.pos, end: endPoly.pos, path: [{ id: endPoly.poly, mode: 1 }] };
         }
-        return this.findPolyPath(startPoly, endPoly);
+        return { start: startPoly.pos, end: endPoly.pos, path: this.findPolyPath(startPoly.poly, endPoly.poly) };
     }
     buildSpatialIndex() {
         for (let i = 0; i < this.mesh.polys.length; i++) {
@@ -106,30 +108,45 @@ export class PolyGraphAStar {
      * 返回包含点的 poly index，找不到返回 -1
      * @param {{x:number,y:number,z:number}} p
      */
-    findContainingPoly(p) {
+    findNearestPoly(p) {
+        const extents = MAX_JUMP_HEIGHT * MESH_CELL_SIZE_Z;//高度误差
         let bestPoly = -1;
         let bestDist = Infinity;
+        let bestPos = p;
         const x = Math.floor(p.x / this.spatialCellSize);
         const y = Math.floor(p.y / this.spatialCellSize);
-        const key = `${x}_${y}`;
-        const candidates = this.spatialGrid.get(key);
-        if (!candidates) return -1;
-        for (const polyIdx of candidates) {
-            const poly = this.mesh.polys[polyIdx];
-            const cp = closestPointOnPoly(p, this.mesh.verts, poly);
-            if (!cp) continue;
+        for (let i = -1; i <= 1; i++) {
+            for (let j = -1; j <= 1; j++) {
+                const key = `${x + i}_${y + j}`;
+                //const key = `${x}_${y}`;
+                const candidates = this.spatialGrid.get(key);
+                if (!candidates) continue;
+                //if (!candidates) return{pos:bestPos,poly:bestPoly};
+                for (const polyIdx of candidates) {
+                    const poly = this.mesh.polys[polyIdx];
+                    const cp = closestPointOnPoly(p, this.mesh.verts, poly);
+                    if (!cp) continue;
 
-            const dx = cp.x - p.x;
-            const dy = cp.y - p.y;
-            const dz = cp.z - p.z;
-            const d = dx * dx + dy * dy + dz * dz;
+                    if (cp.in == true) {
+                        const h = this.heightfixer._getHeightOnDetail(polyIdx, p);
+                        cp.z = h;
+                    }
+                    //Instance.DebugSphere({center:{x:cp.x,y:cp.y,z:cp.z},radius:2,duration:1,color:{r:255,g:0,b:0}});
+                    const dx = cp.x - p.x;
+                    const dy = cp.y - p.y;
+                    const dz = cp.z - p.z;
+                    const d = dx * dx + dy * dy + dz * dz;
 
-            if (d < bestDist) {
-                bestDist = d;
-                bestPoly = polyIdx;
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestPoly = polyIdx;
+                        bestPos = cp;
+                    }
+                }
             }
         }
-        return bestPoly;
+
+        return { pos: bestPos, poly: bestPoly };
     }
     /**
      * @param {number} start
@@ -157,8 +174,8 @@ export class PolyGraphAStar {
 
             if (current === end) return this.reconstruct(parent, walkMode, end);
             state[current] = 2;
-            
-            const hToTarget=this.distsqr(current, end);
+
+            const hToTarget = this.distsqr(current, end);
             if (hToTarget < minH) {
                 minH = hToTarget;
                 closestNode = current;
@@ -205,7 +222,7 @@ export class PolyGraphAStar {
                 }
             }
         }
-        return this.reconstruct(parent,walkMode, closestNode);
+        return this.reconstruct(parent, walkMode, closestNode);
     }
     /**
      * @param {Int32Array} parent

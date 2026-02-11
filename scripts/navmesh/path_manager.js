@@ -5,7 +5,7 @@ import { ContourBuilder } from "./path_contourbuilder";
 import { PolyMeshBuilder } from "./path_polymeshbuilder";
 import { Instance } from "cs_script/point_script";
 import { PolyMeshDetailBuilder } from "./path_polydetail";
-import { ADJUST_HEIGHT_DISTANCE, CONTOUR_DEBUG, JUMP_LINK_DEBUG, LOAD_DEBUG, LOAD_STATIC_MESH, MESH_DEBUG, MESH_OPTIMIZATION_1, MESH_OPTIMIZATION_2, MESH_OPTIMIZATION_3, POLY_DEBUG, POLY_DETAIL_DEBUG, PRINT_NAV_MESH, REGION_DEBUG } from "./path_const";
+import { ADJUST_HEIGHT_DISTANCE, CONTOUR_DEBUG, JUMP_LINK_DEBUG, LOAD_DEBUG, LOAD_STATIC_MESH, MESH_DEBUG, MESH_OPTIMIZATION_1, MESH_OPTIMIZATION_2, POLY_DEBUG, POLY_DETAIL_DEBUG, PRINT_NAV_MESH, REGION_DEBUG } from "./path_const";
 import { OpenHeightfield } from "./path_openheightfield";
 import { JumpLinkBuilder } from "./path_jumplinkbuild";
 import { StaticData } from "./path_navemeshstatic";
@@ -151,7 +151,6 @@ export class NavMesh {
             this.hf.init();
             if(MESH_OPTIMIZATION_1)this.hf.findcanwalk();
             if(MESH_OPTIMIZATION_2)this.hf.deleteboundary();
-            if(MESH_OPTIMIZATION_3)this.hf.deletealone();
             let end = new Date();
             Instance.Msg(`网格生成完成,耗时${end.getTime() - start.getTime()}ms`);
             //return;
@@ -194,9 +193,9 @@ export class NavMesh {
         }
 
         //构建A*寻路
-        this.astar = new PolyGraphAStar(this.mesh,this.links);
-        this.funnel = new FunnelPath(this.mesh, this.astar.centers,this.links);
         this.heightfixer=new FunnelHeightFixer(this.mesh,this.meshdetail,ADJUST_HEIGHT_DISTANCE);
+        this.astar = new PolyGraphAStar(this.mesh,this.links,this.heightfixer);
+        this.funnel = new FunnelPath(this.mesh, this.astar.centers,this.links);
         if(PRINT_NAV_MESH)this.exportNavData();
     }
     /**
@@ -206,13 +205,21 @@ export class NavMesh {
      * @returns {{pos:{x:number,y:number,z:number},mode:number}[]}
      */
     findPath(start, end) {
+        //Instance.DebugLine({start,end,duration:1,color:{r:0,g:255,b:0}});
+        //Instance.Msg(`start:     x:${start.x},y:${start.y},z:${start.z}     end:     x:${end.x},y:${end.y},z:${end.z}`);
+        //Instance.Msg("\n\n");
         const polyPath=this.astar.findPath(start,end);
-
-        if (!polyPath || polyPath.length === 0) return [];
-        const funnelPath = this.funnel.build(polyPath, start, end);
-        const ans=this.heightfixer.fixHeight(funnelPath,polyPath);
-        //this.debugDrawPolyPath(polyPath, 1 / 2);
-        this.debugDrawfunnelPath(funnelPath,1/2);
+        //Instance.Msg("astar:"+polyPath.path.length);
+        //this.debugDrawPolyPath(polyPath.path, 1);
+        if (!polyPath || polyPath.path.length === 0) return [];
+        const funnelPath = this.funnel.build(polyPath.path, polyPath.start, polyPath.end);
+        //Instance.Msg("funnel:"+funnelPath.length);
+        //this.debugDrawfunnelPath(funnelPath,1/1);
+        const ans=this.heightfixer.fixHeight(funnelPath,polyPath.path);
+        //Instance.DebugSphere({center:polyPath.start,radius:1,duration:1});
+        //Instance.DebugSphere({center:polyPath.end,radius:1,duration:1});
+        //Instance.Msg("heightfixer:"+ans.length);
+        if (!ans || ans.length === 0) return [];
         this.debugDrawPath(ans,1/2);
 
         //多边形总数：1025跳点数：162
@@ -270,26 +277,48 @@ export class NavMesh {
      * @param {{pos:{x:number,y:number,z:number},mode:number}[]} path
      */
     debugDrawPath(path, duration = 10) {
-        if (!path || path.length < 2) {
-            Instance.Msg("No path to draw");
-            return;
-        }
         const color = {
-            r: Math.floor(255),
+            r: Math.floor(0),
             g: Math.floor(0),
-            b: Math.floor(0),
+            b: Math.floor(255),
         };
         const colorJ = {
             r: Math.floor(255),
             g: Math.floor(255),
             b: Math.floor(0),
         };
+        if (!path||path.length==2) {
+            if(path.length==2)
+            {
+                Instance.DebugSphere({
+                    center: { x: path[0].pos.x, y: path[0].pos.y, z: path[0].pos.z },
+                    radius: 3,
+                    color: { r: 0, g: 0, b: 255 },
+                    duration
+                });
+                Instance.DebugLine({
+                    start: { x: path[0].pos.x, y: path[0].pos.y, z: path[0].pos.z },
+                    end: { x: path[1].pos.x, y: path[1].pos.y, z: path[1].pos.z },
+                    color:path[1].mode==2?colorJ:color,
+                    duration
+                });
+
+                Instance.DebugSphere({
+                    center: { x: path[1].pos.x, y: path[1].pos.y, z: path[1].pos.z },
+                    radius: 3,
+                    color:path[1].mode==2?colorJ:color,
+                    duration
+                });
+            }
+            else Instance.Msg("No path to draw");
+            return;
+        }
 
         const last = path[0].pos;
         Instance.DebugSphere({
             center: { x: last.x, y: last.y, z: last.z },
             radius: 3,
-            color: { r: 255, g: 0, b: 0 },
+            color: { r: 0, g: 0, b: 255 },
             duration
         });
         for (let i = 1; i < path.length; i++) {
@@ -329,6 +358,7 @@ export class NavMesh {
             b: Math.floor(100 + Math.random() * 155),
         };
         for (const pi of polyPath) {
+            Instance.Msg(pi.id);
             const poly = this.mesh.polys[pi.id];
 
             // poly 中心

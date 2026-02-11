@@ -1,4 +1,3 @@
-import { Instance } from "cs_script/point_script";
 import { FUNNEL_DISTANCE } from "./path_const";
 
 export class FunnelPath {

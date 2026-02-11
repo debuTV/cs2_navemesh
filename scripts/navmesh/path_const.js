@@ -1,20 +1,19 @@
 import { Instance } from "cs_script/point_script";
 //==============================世界相关设置=====================================
-export const origin = { x: -2250, y: -1200, z: -200 };
+export const origin = { x: -2300, y: -1150, z: -230 };
 //==============================Recast设置======================================
 //体素化参数
-export const MESH_CELL_SIZE_XY = 5;                               // 体素大小
+export const MESH_CELL_SIZE_XY = 6;                               // 体素大小
 export const MESH_CELL_SIZE_Z = 1;                                // 体素高度
+export const MESH_TRACE_SIZE_Z = 32;                              // 射线方块高度//太高，会把竖直方向上的间隙也忽略
 export const MESH_WORLD_SIZE_XY = 4500;                           // 世界大小
-export const MESH_WORLD_SIZE_Z = 480;                             // 世界高度
+export const MESH_WORLD_SIZE_Z = 800;                             // 世界高度
 export const MESH_OPTIMIZATION_1 = true;                          // 优化1：是否修剪掉info_target{name:navmesh}不能去的体素
-export const MESH_OPTIMIZATION_2 = true;                          // 优化2: 忽略边界旁边1个体素，防止出现爬墙,这个选项需要CELL_SIZE足够小，(当出现耳割法错误时推荐开启)
-export const MESH_OPTIMIZATION_3 = false;                         // 优化3: 忽略三个方向都是边界的体素
-export const MESH_ERODE_RADIUS = 0;                               // 腐蚀半径，如果一个区域应该不能被走到，但优化1未去除，可以增加此值
-export const MESH_HOLE_FILLING = 0;                               // 有些时候莫名其妙有空洞，这时候可以自动填洞,数值越高，越有可能填中
+export const MESH_OPTIMIZATION_2 = true;                          // 优化2: 按行走高度忽略边界旁边1个体素，防止出现爬墙,这个选项需要CELL_SIZE足够小，(当出现耳割法错误时推荐开启)
+export const MESH_ERODE_RADIUS = 3;                               // 按跳跃高度，腐蚀半径，如果一个区域应该不能被走到，但优化1未去除，可以增加此值,或者修改地图设计
 //区域生成参数
 export const REGION_MERGE_AREA = 1024;                            // 合并区域阈值（体素单位）
-export const REGION_MIN_AREA = 16;                                // 最小区域面积（体素单位）
+export const REGION_MIN_AREA = 8;                                // 最小区域面积（体素单位）
 //轮廓生成参数
 export const CONT_MAX_ERROR = MESH_CELL_SIZE_XY * 1.2;            // 原始点到简化后边的最大允许偏离距离（长度）
 // 多边形网格配置
@@ -26,11 +25,11 @@ export const POLY_DETAIL_HEIGHT_ERROR = 5;                        // 构建细�
 //其他参数
 export const MAX_WALK_HEIGHT = 13 / MESH_CELL_SIZE_Z;             // 怪物最大可行走高度（体素单位）
 export const MAX_JUMP_HEIGHT = 64 / MESH_CELL_SIZE_Z;             // 怪物最大可跳跃高度（体素单位）
-export const AGENT_RADIUS = 15 / MESH_CELL_SIZE_XY;               // 人物通过所需宽度大小（长度）
+export const AGENT_RADIUS = 32 / MESH_CELL_SIZE_XY;               // 人物通过所需宽度大小（长度）
 export const AGENT_HEIGHT = 72 / MESH_CELL_SIZE_Z;                // 人物高度（体素单位）
 //生成参数
 export const PRINT_NAV_MESH = false;                              // 是否打印导航网格
-export const LOAD_STATIC_MESH = false;                            // 载入静态导航网格，载入静态网格时，不能debug
+export const LOAD_STATIC_MESH = true;                            // 载入静态导航网格，载入静态网格时，不能debug
 //==============================Debug设置=======================================
 export const MESH_DEBUG = false;                                  // 显示体素化后体素
 export const REGION_DEBUG = false;                                // 显示区域
@@ -38,7 +37,7 @@ export const CONTOUR_DEBUG = false;                               // 显示区�
 export const POLY_DEBUG = false;                                   // 显示最后的寻路多边形
 export const POLY_DETAIL_DEBUG = false;                           // 显示最后的细节多边形
 export const JUMP_LINK_DEBUG = false;                              // 显示跳点
-export const LOAD_DEBUG = false;                                  // 载入静态数据时可开启，查看是否导入成功
+export const LOAD_DEBUG = true;                                  // 载入静态数据时可开启，查看是否导入成功
 //==============================Detour设置======================================
 //A*寻路参数
 export const ASTAR_OPTIMIZATION_1 = false;                        //是否预计算距离，推荐多边形在2000及以下可以打开
@@ -47,7 +46,7 @@ export const ASTAR_HEURISTIC_SCALE = 1.2;                         //A*推荐数�
 //Funnel参数
 export const FUNNEL_DISTANCE = 25;                                //拉直的路径距离边缘多远(0-100，百分比，100%意味着只能走边的中点)
 //高度修正参数
-export const ADJUST_HEIGHT_DISTANCE = 200;                        //路径中每隔这个距离增加一个点，用于修正高度
+export const ADJUST_HEIGHT_DISTANCE = 50;                        //路径中每隔这个距离增加一个点，用于修正高度
 
 /**
  * 返回一个随机的颜色
@@ -60,63 +59,6 @@ export function getRandomColor() {
         b: Math.floor(Math.random() * 255),
         a: 255
     };
-}
-/**
- * 计算空间两点之间的距离
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @returns {number}
- */
-export function posDistance3D(a, b) {
-    const dx = a.x - b.x; const dy = a.y - b.y; const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-/**
- * 计算空间两点之间的距离的平方
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @returns {number}
- */
-export function posDistance3Dsqr(a, b) {
-    const dx = a.x - b.x; const dy = a.y - b.y; const dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
-}
-/**
- * 计算xy平面两点之间的距离
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @returns {number}
- */
-export function posDistance2D(a, b) {
-    const dx = a.x - b.x; const dy = a.y - b.y;
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-/**
- * 计算xy平面两点之间的距离的平方
- * @param {import("cs_script/point_script").Vector} a
- * @param {import("cs_script/point_script").Vector} b
- * @returns {number}
- */
-export function posDistance2Dsqr(a, b) {
-    const dx = a.x - b.x; const dy = a.y - b.y;
-    return dx * dx + dy * dy;
-}
-/**
- * 返回pos上方height高度的点
- * @param {import("cs_script/point_script").Vector} pos
- * @param {number} height
- * @returns {import("cs_script/point_script").Vector}
- */
-export function posZfly(pos, height) {
-    return { x: pos.x, y: pos.y, z: pos.z + height };
-}
-/**
- * 输出点pos的坐标
- * @param {import("cs_script/point_script").Vector} pos
- */
-export function msgPos(pos) {
-    Instance.Msg(`{${pos.x} ${pos.y} ${pos.z}}`);
 }
 /**
  * 根据体素(i,j,k)坐标返回世界(x,y,z)坐标
@@ -189,15 +131,6 @@ export function traceAirpd(pos) {
     const start = { x: pos.x, y: pos.y, z: pos.z - 1 };
     const end = { x: pos.x, y: pos.y, z: origin.z + MESH_WORLD_SIZE_Z };
     return Instance.TraceLine({ start, end, ignorePlayers: true });
-}
-/**
- * 返回向量vec1+vec2
- * @param {import("cs_script/point_script").Vector} vec1
- * @param {import("cs_script/point_script").Vector} vec2
- * @returns {import("cs_script/point_script").Vector}
- */
-export function vecadd(vec1, vec2) {
-    return { x: vec1.x + vec2.x, y: vec1.y + vec2.y, z: vec1.z + vec2.z };
 }
 /**
  * 返回三点是否共线
@@ -343,11 +276,14 @@ export function closestPointOnPoly(pos, verts, poly) {
     // 1. 如果在多边形内部（XY），直接投影到平面
     if (pointInConvexPolyXY(pos, verts, poly)) {
         // 用平均高度（你也可以用平面方程）
-        let z = 0;
-        for (const vi of poly) z += verts[vi].z;
-        z /= poly.length;
+        let maxz = -Infinity,minz=Infinity;
+        for (const vi of poly)
+        {
+            maxz =Math.max(maxz,verts[vi].z);
+            minz =Math.min(minz,verts[vi].z);
+        }
 
-        return { x: pos.x, y: pos.y, z };
+        return { x: pos.x, y: pos.y, z:0,in:true};
     }
 
     // 2. 否则，找最近边
@@ -366,7 +302,7 @@ export function closestPointOnPoly(pos, verts, poly) {
 
         if (d < bestDist) {
             bestDist = d;
-            best = c;
+            best = {x: c.x, y: c.y, z:c.z,in:false};
         }
     }
 

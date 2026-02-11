@@ -1,5 +1,6 @@
 import { Instance } from "cs_script/point_script";
-import { area, distPtSegSq, getRandomColor, isConvex, POLY_MAX_VERTS_PER_POLY, pointInTri, posDistance2Dsqr, posZfly, posDistance3Dsqr, isCollinear, POLY_MERGE_LONGEST_EDGE_FIRST, POLY_BIG_TRI } from "./path_const";
+import { area, distPtSegSq, isConvex, POLY_MAX_VERTS_PER_POLY, pointInTri, POLY_MERGE_LONGEST_EDGE_FIRST, POLY_BIG_TRI } from "./path_const";
+import { vec } from "../util/vector";
 
 export class PolyMeshBuilder {
 
@@ -82,16 +83,16 @@ export class PolyMeshBuilder {
                         if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
                         if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
                         {
-                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            if (vec.length2D(prev, verts[j]) == 0 || vec.length2D(next, verts[j]) == 0) continue;
                             contains = true;
                             break;
                         }
                     }
                     if (contains) continue;
                     const perimeter = 
-                    Math.sqrt(posDistance2Dsqr(prev, cur)) +
-                    Math.sqrt(posDistance2Dsqr(cur, next)) +
-                    Math.sqrt(posDistance2Dsqr(next, prev));
+                    vec.length2D(prev, cur) +
+                    vec.length2D(cur, next) +
+                    vec.length2D(next, prev);
                 
                     // 找到周长最短的耳朵
                     if (perimeter < minPerimeter) {
@@ -135,7 +136,7 @@ export class PolyMeshBuilder {
                         if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
                         if (distPtSegSq(verts[j], prev, next) == 0) //判断点p是否在ab线段上
                         {
-                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            if (vec.length2D(prev, verts[j]) == 0 || vec.length2D(next, verts[j]) == 0) continue;
                             contains = true;
                             break;
                         }
@@ -188,7 +189,7 @@ export class PolyMeshBuilder {
                     for (let j = 0; j < verts.length; j++) {
                         if (j == i || j == ((i - 1 + verts.length) % verts.length) || j == ((i + 1) % verts.length)) continue;
                         if (distPtSegSq(verts[j], prev, next) == 0) {
-                            if (posDistance2Dsqr(prev, verts[j]) == 0 || posDistance2Dsqr(next, verts[j]) == 0) continue;
+                            if (vec.length2D(prev, verts[j]) == 0 || vec.length2D(next, verts[j]) == 0) continue;
                             contains = true;
                             break;
                         }
@@ -275,7 +276,7 @@ export class PolyMeshBuilder {
             for (let j = 0; j < b.length; j++) {
                 const bNext = (j + 1) % b.length;
                 // 判断边是否重合 (a[i]->a[i+1] == b[j+1]->b[j])
-                if (posDistance3Dsqr(a[i],b[bNext])<=1&&posDistance3Dsqr(a[aNext],b[j])<=1) {
+                if (vec.length(a[i],b[bNext])<=1&&vec.length(a[aNext],b[j])<=1) {
                     ai = i;
                     bi = j;
                     break;
@@ -396,8 +397,8 @@ export class PolyMeshBuilder {
             const color={r:255,g:255,b:0};
             const z = Math.random() * 40*0;
             for (let i = 0; i < poly.length; i++) {
-                const start = posZfly(this.verts[poly[i]], z);
-                const end = posZfly(this.verts[poly[(i + 1) % poly.length]], z);
+                const start = vec.Zfly(this.verts[poly[i]], z);
+                const end = vec.Zfly(this.verts[poly[(i + 1) % poly.length]], z);
                 Instance.DebugLine({ start, end, color, duration });
                 //Instance.DebugSphere({center:start,radius:6,color,duration});
             }
@@ -441,8 +442,8 @@ export class PolyMeshBuilder {
                 if (ni < 0) continue;
                 // 只画一次
                 if (ni < i) continue;
-                const start = posZfly(this.verts[polyA[ei]], 20);
-                const end = posZfly(this.verts[polyA[(ei + 1) % polyA.length]], 20);
+                const start = vec.Zfly(this.verts[polyA[ei]], 20);
+                const end = vec.Zfly(this.verts[polyA[(ei + 1) % polyA.length]], 20);
                 Instance.DebugLine({ start, end, color: { r: 0, g: 255, b: 0 }, duration });
             }
         }

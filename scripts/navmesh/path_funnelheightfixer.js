@@ -1,4 +1,4 @@
-import { posDistance2Dsqr } from "./path_const";
+import { pointInConvexPolyXY } from "./path_const";
 
 export class FunnelHeightFixer {
     /**
@@ -50,7 +50,7 @@ export class FunnelHeightFixer {
     /* ===============================
        Public API
     =============================== */
-
+    
     /**
      * @param {{ x: number; y: number; z: any; }} pos
      * @param {number} polyid
@@ -67,6 +67,8 @@ export class FunnelHeightFixer {
             pos: { x: pos.x, y: pos.y, z: h },
             mode: 1
         });
+        //Instance.DebugSphere({center:{ x: pos.x, y: pos.y, z: h },radius:1,duration:1/32,color:{r:0,g:255,b:0}});
+                
     }
     /**
      * @param {{pos:{x:number,y:number,z:number},mode:number}[]} funnelPath
@@ -74,7 +76,6 @@ export class FunnelHeightFixer {
      */
     fixHeight(funnelPath,polyPath) {
         if (funnelPath.length === 0) return [];
-
         const result = [];
         let polyIndex = 0;
 
@@ -90,6 +91,7 @@ export class FunnelHeightFixer {
             if(curr.mode == 2)result.push(curr);
             // 分段采样
             const samples = this._subdivide(curr.pos, next.pos);
+            //Instance.Msg(samples.length);
             let preh=curr.pos.z;
             let prep=curr;
             for (let j = (curr.mode == 2)?1:0; j < samples.length; j++) {
@@ -115,14 +117,15 @@ export class FunnelHeightFixer {
                     pos: { x: p.x, y: p.y, z: h },
                     mode: 1
                 });
+                //Instance.DebugSphere({center:{ x: p.x, y: p.y, z: h },radius:1,duration:1/32,color:{r:255,g:0,b:0}});
                 preh=h;
                 prep=result[result.length - 1];
             }
         }
-
         // 最后一个点
-        result.push(funnelPath[funnelPath.length - 1]);
-        return result;
+        ////result.push(funnelPath[funnelPath.length - 1]);
+        //删除起点和终点
+        return result.slice(1,result.length);
     }
 
     /* ===============================
@@ -222,27 +225,13 @@ export class FunnelHeightFixer {
     =============================== */
 
     /**
-     * @param {{ y: number; x: number; }} p
+     * @param {{ y: number; x: number; z:0}} p
      * @param {number} polyId
      */
     _pointInPolyXY(p, polyId) {
         const poly = this.navMesh.polys[polyId];
-        let inside = false;
-
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-            const vi = this.navMesh.verts[poly[i]];
-            const vj = this.navMesh.verts[poly[j]];
-
-            if (
-                ((vi.y > p.y) !== (vj.y > p.y)) &&
-                (p.x < (vj.x - vi.x) * (p.y - vi.y) / (vj.y - vi.y) + vi.x)
-            ) {
-                inside = !inside;
-            }
-        }
-        return inside;
+        return pointInConvexPolyXY(p,this.navMesh.verts,poly);
     }
-
     /**
      * @param {{ y: number; x: number; }} p
      * @param {{ x: number; y: number;}} a
