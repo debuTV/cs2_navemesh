@@ -1,19 +1,24 @@
-import { Instance } from "cs_script/point_script";
+﻿import { Instance } from "cs_script/point_script";
 import { POLY_DETAIL_SAMPLE_DIST, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, origin, pointInTri, POLY_DETAIL_HEIGHT_ERROR, isConvex, distPtSegSq } from "./path_const";
 import { OpenHeightfield } from "./path_openheightfield";
 import { OpenSpan } from "./path_openspan";
-import { vec } from "../util/vector";
+import { Tool } from "./util/tool";
+import { vec } from "./util/vector";
+/** @typedef {import("cs_script/point_script").Vector} Vector */
+/** @typedef {import("./path_manager").NavMeshMesh} NavMeshMesh */
 
 export class PolyMeshDetailBuilder {
     /**
-     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][],regions:number[],neighbors:number[][]}} mesh
+     * @param {NavMeshMesh} mesh
      * @param {OpenHeightfield} hf
      */
     constructor(mesh, hf) {
+        /** @type {boolean} */
+        this.error = false;
         this.mesh = mesh;
         /**@type {OpenHeightfield} */
         this.hf = hf;
-        /**@type {import("cs_script/point_script").Vector[]}*/
+        /**@type {Vector[]}*/
         this.verts = [];
         /**@type {number[][]}*/
         this.tris = [];
@@ -24,6 +29,7 @@ export class PolyMeshDetailBuilder {
     }
 
     init() {
+        this.error = false;
         for (let pi = 0; pi < this.mesh.polys.length; pi++) {
             this.buildPoly(pi);
         }
@@ -51,25 +57,27 @@ export class PolyMeshDetailBuilder {
         const poly = this.mesh.polys[pi];
         const regionid=this.mesh.regions[pi];
         const polyVerts = this.getPolyVerts(this.mesh, poly);
-        //待更新：生成内部采样点时高度用三角剖分后的高度
+        // 待优化：内部采样点高度可改为基于细分后三角形插值
 
         // 1. 为多边形边界顶点采样高度
         const borderVerts = this.applyHeights(polyVerts, this.hf,regionid);
         // 2. 计算边界平均高度和高度范围
         const borderHeightInfo = this.calculateBorderHeightInfo(borderVerts);
-        // 3. 获取初始三角剖分（用于高度差异检查）
+        // 3. 获取初始三角划分（用于高度误差检查）
         const initialVertices = [...borderVerts];
         const initialConstraints = [];
         for (let i = 0; i < borderVerts.length; i++) {
             const j = (i + 1) % borderVerts.length;
             initialConstraints.push([i, j]);
         }
-        // 4. 执行初始剖分（基于边界点）
-        const trianglesCDT = new SimplifiedCDT(initialVertices, initialConstraints);
+        // 4. 执行初始划分（基于边界点）
+        const trianglesCDT = new SimplifiedCDT(initialVertices, initialConstraints, () => {
+            this.error = true;
+        });
         let triangles = trianglesCDT.getTri();
-        // 5. 生成内部包括边界采样点
+        // 5. 生成内部采样点
         let rawSamples = this.buildDetailSamples(polyVerts, borderHeightInfo, this.hf,triangles,trianglesCDT.vertices,regionid);
-        // 6. 过滤内部采样点：只保留高度差异大的点
+        // 6. 过滤内部采样点：仅保留高度误差较大的点
         while(rawSamples.length>0)
         {
             let insert=false;
@@ -89,7 +97,7 @@ export class PolyMeshDetailBuilder {
                         break;
                     }
                 }
-                // 只有当高度差异超过阈值时才保留
+                // 仅当高度误差超过阈值时保留
                 if(diff<=POLY_DETAIL_HEIGHT_ERROR)toRemoveIndices.push(i);
                 else if (diff > heightDiff) {
                     heightDiff=diff;
@@ -111,6 +119,7 @@ export class PolyMeshDetailBuilder {
             this.verts.push(v);
         }
         triangles = trianglesCDT.getTri();
+        if (trianglesCDT.error) this.error = true;
 
         for (const tri of triangles) {
             this.tris.push([
@@ -129,8 +138,8 @@ export class PolyMeshDetailBuilder {
         ]);
     }
     /**
-     * 计算边界顶点的高度信息
-     * @param {import("cs_script/point_script").Vector[]} borderVerts
+    * 计算边界顶点高度信息
+     * @param {Vector[]} borderVerts
      * @returns {{avgHeight: number, minHeight: number, maxHeight: number, heightRange: number}}
      */
     calculateBorderHeightInfo(borderVerts) {
@@ -155,20 +164,20 @@ export class PolyMeshDetailBuilder {
         };
     }
     /**
-     * @param {{ verts: import("cs_script/point_script").Vector[]; polys?: number[][]; regions?: number[]; neighbors?: number[][]; }} mesh
+     * @param {NavMeshMesh} mesh
      * @param {number[]} poly
      */
     getPolyVerts(mesh, poly) {
         return poly.map(vi => mesh.verts[vi]);
     }
     /**
-     * 生成内部采样点（带高度误差检查）
-     * @param {import("cs_script/point_script").Vector[]} polyVerts
+    * 生成内部采样点（带高度误差检查）
+     * @param {Vector[]} polyVerts
      * @param {{avgHeight: number;minHeight: number;maxHeight: number;heightRange: number;}} heightInfo
      * @param {OpenHeightfield} hf
-     * @returns {import("cs_script/point_script").Vector[]}
+     * @returns {Vector[]}
      * @param {Triangle[]} initialTriangles
-     * @param {import("cs_script/point_script").Vector[]} initialVertices
+     * @param {Vector[]} initialVertices
      * @param {number} regionid
      */
     buildDetailSamples(polyVerts, heightInfo, hf,initialTriangles,initialVertices,regionid) {
@@ -209,9 +218,9 @@ export class PolyMeshDetailBuilder {
         return samples;
     }
     /**
-     * @param {import("cs_script/point_script").Vector} sample
+     * @param {Vector} sample
      * @param {Triangle} tri
-     * @param {import("cs_script/point_script").Vector[]} verts
+     * @param {Vector[]} verts
      */
     isNearTriangleEdge(sample, tri, verts) {
 
@@ -220,7 +229,7 @@ export class PolyMeshDetailBuilder {
         return false;
     }
     /**
-     * @param {import("cs_script/point_script").Vector[]} polyVerts
+     * @param {Vector[]} polyVerts
      * @param {OpenHeightfield} hf
      * @param {number} regionid
      */
@@ -260,13 +269,13 @@ export class PolyMeshDetailBuilder {
         return resultVerts;
     }
     /**
-     * 在 [start, end] 之间递归插入高度偏差最大的点
-     * @param {import("cs_script/point_script").Vector} start
-     * @param {import("cs_script/point_script").Vector} end
-     * @param {import("cs_script/point_script").Vector[]} samples // 该边上的细分点（不含 start/end）
+    * 在 [start, end] 之间递归插入高度误差最大的点
+     * @param {Vector} start
+     * @param {Vector} end
+    * @param {Vector[]} samples // 该边上的细分点（不含 start/end）
      * @param {OpenHeightfield} hf
      * @param {number} regionid
-     * @param {import("cs_script/point_script").Vector[]} outVerts
+     * @param {Vector[]} outVerts
      */
     subdivideEdgeByHeight(start, end,samples,hf,regionid,outVerts) {
         let maxError = 0;
@@ -279,7 +288,7 @@ export class PolyMeshDetailBuilder {
             const s = samples[i];
             const t = (i + 1) / (total + 1);
 
-            // 如果不加该点时的插值高度
+            // 不加入该点时的插值高度
             const interpZ = start.z * (1 - t) + end.z * t;
 
             const h = this.sampleHeight(hf, s.x, s.y, interpZ, regionid);
@@ -292,12 +301,12 @@ export class PolyMeshDetailBuilder {
             }
         }
 
-        // 没有需要加的点
+        // 没有需要加入的点
         if (maxError <= POLY_DETAIL_HEIGHT_ERROR || maxIndex === -1||!maxVert) {
             return;
         }
 
-        // 递归左半
+        // 递归左半段
         this.subdivideEdgeByHeight(
             start,
             maxVert,
@@ -307,10 +316,10 @@ export class PolyMeshDetailBuilder {
             outVerts
         );
 
-        // 插入当前最大误差点（顺序保证）
+        // 插入当前最大误差点（保持顺序）
         outVerts.push(maxVert);
 
-        // 递归右半
+        // 递归右半段
         this.subdivideEdgeByHeight(
             maxVert,
             end,
@@ -321,12 +330,12 @@ export class PolyMeshDetailBuilder {
         );
     }
     /**
-     * 在边上采样并检查高度误差
-     * @param {import("cs_script/point_script").Vector} start
-     * @param {import("cs_script/point_script").Vector} end
+    * 在边上采样并检查高度误差
+     * @param {Vector} start
+     * @param {Vector} end
      * @param {OpenHeightfield} hf
      * @param {number} sampleDist
-     * @returns {import("cs_script/point_script").Vector[]}
+     * @returns {Vector[]}
      */
     sampleEdgeWithHeightCheck(start, end, hf, sampleDist) {
         const samples = [];
@@ -337,19 +346,19 @@ export class PolyMeshDetailBuilder {
         const length = Math.sqrt(dx * dx + dy * dy);
         
         if (length <= 1e-6) {
-            return []; // 边长度为0，不采样
+            return []; // 边长度为 0，不采样
         }
         
         // 计算方向向量
         const dirX = dx / length;
         const dirY = dy / length;
-        // 计算采样点数（不包括起点和终点）
+        // 计算采样点数（不包含起点和终点）
         const numSamples = Math.floor(length / sampleDist);
         
-        // 记录上一个采样点的高度
+        // 记录采样点高度
 
         for (let i = 1; i <= numSamples; i++) {
-            const t = i / (numSamples + 1); // 确保不采样到端点
+            const t = i / (numSamples + 1); // 确保不会采样到端点
             const x = start.x + dirX * length * t;
             const y = start.y + dirY * length * t;
             const z = start.z * (1 - t) + end.z * t;
@@ -366,36 +375,37 @@ export class PolyMeshDetailBuilder {
      * @param {number} regionid
      */
     sampleHeight(hf, wx, wy, fallbackZ,regionid) {
-        const ix = Math.floor((wx - origin.x) / MESH_CELL_SIZE_XY);
-        const iy = Math.floor((wy - origin.y) / MESH_CELL_SIZE_XY);
+        const globalIx = Math.round((wx - origin.x+ MESH_CELL_SIZE_XY / 2) / MESH_CELL_SIZE_XY);
+        const globalIy = Math.round((wy - origin.y+ MESH_CELL_SIZE_XY / 2) / MESH_CELL_SIZE_XY);
+        const ix = globalIx - (hf.baseX);
+        const iy = globalIy - (hf.baseY);
 
         if (ix < 0 || iy < 0 || ix >= hf.gridX || iy >= hf.gridY) return fallbackZ;
 
         let best = null;
         let bestDiff = Infinity;
-        /**@type {OpenSpan|null} */
-        let span = hf.cells[ix][iy];
-        while (span) {
-            if(span.regionId==regionid)
+        let spanId = hf.cells[ix][iy];
+        while (spanId !== 0) {
+            if(OpenSpan.getRegionId(spanId)===regionid)
             {
-                const z = origin.z + span.floor * MESH_CELL_SIZE_Z;
+                const z = origin.z + OpenSpan.getFloor(spanId) * MESH_CELL_SIZE_Z;
                 const d = Math.abs(z - fallbackZ);
                 if (d < bestDiff) {
                     bestDiff = d;
                     best = z;
                 }
             }
-            span = span.next;
+            spanId = OpenSpan.getNext(spanId);
         }
-        // 如果没有找到合适的span，开始螺旋式搜索
+        // 如果没有找到合适的 span，开始螺旋式搜索
         if (best === null) {
-            const maxRadius = Math.max(hf.gridX, hf.gridY); // 搜索的最大半径
+            const maxRadius = Math.max(hf.gridX, hf.gridY); // 搜索最大半径
             let radius = 1; // 初始半径
             out:
             while (radius <= maxRadius) {
                 // 螺旋式外扩，检查四个方向
                 for (let offset = 0; offset <= radius; offset++) {
-                    // 检查 (ix + offset, iy + radius) 或 (ix + radius, iy + offset) 等位置
+                    // 检查 (ix + offset, iy + radius) 等候选位置
                     let candidates = [
                         [ix + offset, iy + radius], // 上
                         [ix + radius, iy + offset], // 右
@@ -405,12 +415,12 @@ export class PolyMeshDetailBuilder {
 
                     for (const [nx, ny] of candidates) {
                         if (nx >= 0 && ny >= 0 && nx < hf.gridX && ny < hf.gridY) {
-                            // 在有效范围内，查找对应的span
-                            span = hf.cells[nx][ny];
-                            while (span) {
-                                if(span.regionId==regionid)
+                            // 在有效范围内查找对应 span
+                            spanId = hf.cells[nx][ny];
+                            while (spanId !== 0) {
+                                if(OpenSpan.getRegionId(spanId)===regionid)
                                 {
-                                    const z = origin.z + span.floor * MESH_CELL_SIZE_Z;
+                                    const z = origin.z + OpenSpan.getFloor(spanId) * MESH_CELL_SIZE_Z;
                                     const d = Math.abs(z - fallbackZ);
                                     if (d < bestDiff) {
                                         bestDiff = d;
@@ -418,22 +428,22 @@ export class PolyMeshDetailBuilder {
                                         break out;
                                     }
                                 }
-                                span = span.next;
+                                spanId = OpenSpan.getNext(spanId);
                             }
                         }
                     }
                 }
-                // 增大半径，继续螺旋扩展
+                // 增大半径，继续搜索
                 radius++;
             }
         }
 
-        // 如果最终没有找到合适的span，返回默认的fallbackZ
+        // 如果最终未找到合适 span，返回 fallbackZ
         return best ?? fallbackZ;
     }
     /**
-     * 判断点是否在多边形内（不含边界）
-     * 使用 odd-even rule（射线法）
+    * 判断点是否在多边形内（不含边界）
+    * 使用 odd-even rule（射线法）
      *
      * @param {number} px
      * @param {number} py
@@ -448,8 +458,8 @@ export class PolyMeshDetailBuilder {
             const xi = poly[i].x, yi = poly[i].y;
             const xj = poly[j].x, yj = poly[j].y;
 
-            // ===== 点在边上（直接算 outside）=====
-            if (this.pointOnSegment2D(px, py, xi, yi, xj, yj)) {
+            // ===== 点在边上，按 outside 处理 =====
+            if (Tool.pointOnSegment2D(px, py, xi, yi, xj, yj, { includeEndpoints: true })) {
                 return false;
             }
 
@@ -464,62 +474,46 @@ export class PolyMeshDetailBuilder {
         return inside;
     }
 
-    /**
-     * 点是否在线段上（含端点）
-     * @param {number} px
-     * @param {number} py
-     * @param {number} x1
-     * @param {number} y1
-     * @param {number} x2
-     * @param {number} y2
-     */
-    pointOnSegment2D(px, py, x1, y1, x2, y2) {
-        // 共线
-        const cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1);
-        if (Math.abs(cross) > 1e-6) return false;
-
-        // 在线段范围内
-        const dot =
-            (px - x1) * (px - x2) +
-            (py - y1) * (py - y2);
-
-        return dot <= 0;
-    }
 }
 
 /**
- * 简化的约束Delaunay三角剖分器（针对凸多边形优化）
+ * 简化的约束 Delaunay 三角剖分器
  */
 class SimplifiedCDT {
     /**
-     * @param {import("cs_script/point_script").Vector[]} vertices 顶点列表
-     * @param {number[][]} constraints 约束边列表
+    * @param {Vector[]} vertices 顶点列表
+    * @param {number[][]} constraints 约束边列表
+     * @param {(() => void)} onError
      */
-    constructor(vertices, constraints) {
+    constructor(vertices, constraints, onError) {
+        /** @type {boolean} */
+        this.error = false;
+        /** @type {(() => void) | undefined} */
+        this.onError = onError;
         this.vertices = vertices;
         this.constraints = constraints;
         /** @type {Triangle[]} */
         this.triangles = [];
         
-        // 构建约束边的查找集
+        // 构建约束边查找集合
         this.constraintEdges = new Set();
         for (const [a, b] of constraints) {
-            // 确保边是规范化的（小索引在前）
-            const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+            // 规范化边键（小索引在前）
+            const key = Tool.orderedPairKey(a, b);
             this.constraintEdges.add(key);
         }
-        //初始剖分：耳割法
+        // 初始剖分：耳切法
         this.earClipping(vertices);
     }
 
     /**
-     * @returns {Triangle[]} 三角形顶点索引列表
+    * @returns {Triangle[]} 三角形顶点索引列表
      */
     getTri() {
         return this.triangles;
     }
     /**
-     * @param {{x:number,y:number,z:number}[]} poly
+     * @param {Vector[]} poly
      */
     earClipping(poly) {
         const verts = Array.from({ length: poly.length }, (_, i) => i);
@@ -533,9 +527,9 @@ class SimplifiedCDT {
                 const prev = poly[verts[(i - 1 + verts.length) % verts.length]];
                 const cur = poly[verts[i]];
                 const next = poly[verts[(i + 1) % verts.length]];
-                //cur对应的角度是否<180度
+                // cur 对应角度是否小于 180 度
                 if (!isConvex(prev, cur, next)) continue;
-                //这三个点构成的三角形是否把剩下几个点包含进去了，也就是和已有边相交了
+                // 检查三角形是否包含其他点
                 let contains = false;
                 for (let j = 0; j < verts.length; j++) {
                     if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
@@ -545,10 +539,10 @@ class SimplifiedCDT {
                     }
                 }
                 if (contains) continue;
-                // 其他端点不能在新生成的边上,如果在边上，判断那个点与这边上两点是否在同一位置
+                // 其他点不能在线段 prev-next 上
                 for (let j = 0; j < verts.length; j++) {
                     if (j == i || j == (i - 1 + verts.length) % verts.length || j == (i + 1) % verts.length) continue;
-                    if (distPtSegSq(poly[verts[j]], prev, next) == 0) //判断点p是否在ab线段上
+                    if (distPtSegSq(poly[verts[j]], prev, next) == 0) // 判断点是否在线段上
                     {
                         if (vec.length2D(prev, poly[verts[j]]) == 0 || vec.length2D(next, poly[verts[j]]) == 0) continue;
                         contains = true;
@@ -561,14 +555,14 @@ class SimplifiedCDT {
                 vec.length2D(cur, next) +
                 vec.length2D(next, prev);
             
-                // 找到周长最短的耳朵
+                // 找到周长最小的耳朵
                 if (perimeter < minPerimeter) {
                     minPerimeter = perimeter;
                     bestEar = {p:verts[(i - 1 + verts.length) % verts.length], c:verts[i], n:verts[(i + 1) % verts.length]};
                     bestIndex = i;
                 }
             }
-            // 如果找到了最佳耳朵，割掉它
+            // 找到最佳耳朵则切除
             if (bestEar && bestIndex !== -1) {
                 this.triangles.push(new Triangle(bestEar.p, bestEar.c, bestEar.n));
                 verts.splice(bestIndex, 1);
@@ -579,11 +573,15 @@ class SimplifiedCDT {
         }
         if (verts.length == 3) {
             this.triangles.push(new Triangle(verts[0], verts[1], verts[2]));
-        }else Instance.Msg("细节多边形耳割法错误!");
+        }else {
+            this.error = true;
+            if (this.onError) this.onError();
+            Instance.Msg("细节多边形耳切失败");
+        }
     }
     /**
-     * 简化的点插入方法（你的版本，稍作优化）
-     * @param {import("cs_script/point_script").Vector} point
+     * 简化的点插入方法
+     * @param {Vector} point
      */
     insertPointSimplified(point) {
 
@@ -601,7 +599,7 @@ class SimplifiedCDT {
         }
         
         if (targetIdx === -1) {
-            // 点不在任何三角形内（可能在边上），尝试找到包含点的边
+            // 点不在任何三角形内（可能在边上），尝试处理边上点
             this.handlePointOnEdge(pointIndex);
             //Instance.Msg("点在边上");
             return;
@@ -618,7 +616,7 @@ class SimplifiedCDT {
         
         this.triangles.push(t1, t2, t3);
 
-        // 只对这三条边进行局部优化，而不是全图扫描
+        // 只对这三条边进行局部优化
         this.legalizeEdge(pointIndex, t.a, t.b);
         this.legalizeEdge(pointIndex, t.b, t.c);
         this.legalizeEdge(pointIndex, t.c, t.a);
@@ -629,10 +627,9 @@ class SimplifiedCDT {
      */
     handlePointOnEdge(pointIndex) {
         const p = this.vertices[pointIndex];
-        // 首先检查是否在约束边上
+        // 先检查是否在约束边上
         for (const [a, b] of this.constraints) {
-            if (this.pointOnSegment(p, this.vertices[a], this.vertices[b])) {
-                Instance.Msg("点在约束边上");
+            if (Tool.pointOnSegment2D(p.x, p.y, this.vertices[a].x, this.vertices[a].y, this.vertices[b].x, this.vertices[b].y, { includeEndpoints: true })) {
                 return;
             }
         }
@@ -643,17 +640,17 @@ class SimplifiedCDT {
             
             for (const [a, b] of edges) {
                 if (this.isConstraintEdge(a, b)) continue;
-                if (this.pointOnSegment(p, this.vertices[a], this.vertices[b])) {
-                    // 找到共享这条边的另一个三角形
+                if (Tool.pointOnSegment2D(p.x, p.y, this.vertices[a].x, this.vertices[a].y, this.vertices[b].x, this.vertices[b].y, { includeEndpoints: true })) {
+                    // 找到共享该边的另一个三角形
                     const otherTri = this.findAdjacentTriangleByEdge([a, b], tri);
                     
                     if (otherTri) {
 
-                        // 移除两个共享这条边的三角形
+                        // 移除两个共享该边的三角形
                         this.triangles.splice(this.triangles.indexOf(tri), 1);
                         this.triangles.splice(this.triangles.indexOf(otherTri), 1);
                         
-                        // 获取两个三角形中不在这条边上的顶点
+                        // 获取两个三角形中不在该边上的顶点
                         const c = tri.oppositeVertex(a, b);
                         const d = otherTri.oppositeVertex(a, b);
                         
@@ -678,27 +675,13 @@ class SimplifiedCDT {
         }
     }
     /**
-     * 判断点是否在线段上
-     * @param {{ x: any; y: any;}} p
-     * @param {{ x: any; y: any;}} a
-     * @param {{ x: any; y: any;}} b
-     */
-    pointOnSegment(p, a, b) {
-        const cross = (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
-        if (Math.abs(cross) > 1e-6) return false;
-        
-        const dot = (p.x - a.x) * (p.x - b.x) + (p.y - a.y) * (p.y - b.y);
-        return dot <= 1e-6;
-    }
-
-    /**
-     * 局部递归优化 (Standard Delaunay Legalization)
-     * @param {number} pIdx 新插入的点
-     * @param {number} v1 边的一个端点
-     * @param {number} v2 边的另一个端点
+    * 局部递归优化 (Standard Delaunay Legalization)
+    * @param {number} pIdx 新插入点
+    * @param {number} v1 边的一端
+    * @param {number} v2 边的另一端
      */
     legalizeEdge(pIdx, v1, v2) {
-        // 检查是否是约束边，约束边不可翻转
+        // 约束边不可翻转
         if (this.isConstraintEdge(v1, v2)) {
             return;
         }
@@ -736,17 +719,17 @@ class SimplifiedCDT {
     }
     
     /**
-     * 检查是否是约束边
+    * 检查是否为约束边
      * @param {number} a
      * @param {number} b
      */
     isConstraintEdge(a, b) {
-        const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+        const key = Tool.orderedPairKey(a, b);
         return this.constraintEdges.has(key);
     }
 
     /**
-     * 通过三个顶点找到三角形
+    * 通过三个顶点找到三角形
      * @param {number} a
      * @param {number} b
      * @param {number} c
@@ -766,7 +749,7 @@ class SimplifiedCDT {
     }
     
     /**
-     * 通过共享边找到相邻三角形
+    * 通过共享边找到相邻三角形
      * @param {number[]} edge
      * @param {Triangle} excludeTriangle
      */
@@ -790,7 +773,7 @@ class SimplifiedCDT {
     }
     
     /**
-     * 移除三角形
+    * 移除三角形
      * @param {Triangle} triangle
      */
     removeTriangle(triangle) {
@@ -801,7 +784,7 @@ class SimplifiedCDT {
     }
 
     /**
-     * 检查点是否在三角形的外接圆内
+    * 检查点是否在三角形外接圆内
      * @param {{ x: any; y: any;}} a
      * @param {{ x: any; y: any;}} b
      * @param {{ x: any; y: any;}} c
@@ -851,7 +834,7 @@ class Triangle {
     }
 
     /**
-     * 返回三角形的三条边
+    * 返回三角形的三条边
      * @returns {number[][]}
      */
     edges() {
@@ -863,7 +846,7 @@ class Triangle {
     }
 
     /**
-     * 检查是否包含某条边
+    * 检查是否包含某条边
      * @param {number[]} edge
      * @returns {boolean}
      */
@@ -878,9 +861,9 @@ class Triangle {
     }
 
     /**
-     * 检查点是否在三角形内
-     * @param {import("cs_script/point_script").Vector} point
-     * @param {import("cs_script/point_script").Vector[]} vertices
+    * 检查点是否在三角形内
+     * @param {Vector} point
+     * @param {Vector[]} vertices
      * @returns {boolean}
      */
     containsPoint(point, vertices) {
@@ -892,7 +875,7 @@ class Triangle {
     }
 
     /**
-     * 找到边对面的顶点
+    * 找到边对面的顶点
      * @param {number} v1
      * @param {number} v2
      * @returns {number}
@@ -904,11 +887,11 @@ class Triangle {
         return -1;
     }
     /**
-     * 计算点在三角形平面上的插值高度
-     * @param {number} x 点的x坐标
-     * @param {number} y 点的y坐标
-     * @param {import("cs_script/point_script").Vector[]} vertices
-     * @returns {number} 插值高度
+    * 计算点在三角形平面上的插值高度
+    * @param {number} x 点的 x 坐标
+    * @param {number} y 点的 y 坐标
+     * @param {Vector[]} vertices
+    * @returns {number} 插值高度
      */
     interpolateHeight(x, y, vertices) {
         const va = vertices[this.a];
@@ -919,7 +902,7 @@ class Triangle {
         const denom = (vb.y - vc.y) * (va.x - vc.x) + (vc.x - vb.x) * (va.y - vc.y);
         
         if (Math.abs(denom) < 1e-6) {
-            // 三角形退化，返回三个顶点高度的平均值
+            // 三角形退化时，返回三个顶点高度平均值
             return (va.z + vb.z + vc.z) / 3;
         }
         

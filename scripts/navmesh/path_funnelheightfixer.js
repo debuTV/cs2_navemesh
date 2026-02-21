@@ -1,9 +1,13 @@
-import { pointInConvexPolyXY } from "./path_const";
+import { Instance } from "cs_script/point_script";
+import { PathState, pointInConvexPolyXY, closestPointOnPoly } from "./path_const";
+
+/** @typedef {import("./path_manager").NavMeshMesh} NavMeshMesh */
+/** @typedef {import("./path_manager").NavMeshDetail} NavMeshDetail */
 
 export class FunnelHeightFixer {
     /**
-     * @param {{verts:import("cs_script/point_script").Vector[],polys:number[][]}} navMesh
-     * @param {{verts:{x:number,y:number,z:number}[], tris:number[][],meshes:number[][], triTopoly:number[]}} detailMesh
+    * @param {NavMeshMesh} navMesh
+    * @param {NavMeshDetail} detailMesh
      * @param {number} stepSize
      */
     constructor(navMesh, detailMesh, stepSize = 0.5) {
@@ -59,13 +63,13 @@ export class FunnelHeightFixer {
      */
     addpoint(pos,polyid,polyPath,out)
     {
-        while (polyid < polyPath.length &&!this._pointInPolyXY(pos, polyPath[polyid].id))polyid++;
+        polyid = this._advancePolyIndex(pos, polyid, polyPath);
 
         if (polyid >= polyPath.length) return;
         const h = this._getHeightOnDetail(polyPath[polyid].id, pos);
         out.push({
             pos: { x: pos.x, y: pos.y, z: h },
-            mode: 1
+            mode: PathState.WALK
         });
         //Instance.DebugSphere({center:{ x: pos.x, y: pos.y, z: h },radius:1,duration:1/32,color:{r:0,g:255,b:0}});
                 
@@ -76,25 +80,32 @@ export class FunnelHeightFixer {
      */
     fixHeight(funnelPath,polyPath) {
         if (funnelPath.length === 0) return [];
+        /** @type {{pos:{x:number,y:number,z:number},mode:number}[]} */
         const result = [];
         let polyIndex = 0;
-
+        
         for (let i = 0; i < funnelPath.length - 1; i++) {
             const curr = funnelPath[i];
             const next = funnelPath[i + 1];
 
-            // 跳点：直接输出，不插值
-            if (next.mode == 2) {
+            // 梯子点：始终原样保留，不参与地面采样。
+            // 否则会把 LADDER 点重写成 WALK，出现“梯子被跳过”的现象。
+            if (curr.mode == PathState.LADDER) {
                 result.push(curr);
                 continue;
             }
-            if(curr.mode == 2)result.push(curr);
+            // 跳跃落点(next=JUMP)：前一段不做插值，等待下一轮由 curr=JUMP 处理落地点。
+            if (next.mode == PathState.JUMP) {
+                result.push(curr);
+                continue;
+            }
+            if (curr.mode == PathState.JUMP) result.push(curr);
             // 分段采样
             const samples = this._subdivide(curr.pos, next.pos);
             //Instance.Msg(samples.length);
             let preh=curr.pos.z;
             let prep=curr;
-            for (let j = (curr.mode == 2)?1:0; j < samples.length; j++) {
+            for (let j = (curr.mode == PathState.JUMP)?1:0; j < samples.length; j++) {
                 const p = samples[j];
                 // 跳过重复首点
                 //if (result.length > 0) {
@@ -103,29 +114,33 @@ export class FunnelHeightFixer {
                 //}
                 const preid=polyIndex;
                 // 推进 poly corridor
-                while (polyIndex < polyPath.length &&!this._pointInPolyXY(p, polyPath[polyIndex].id))polyIndex++;
+                polyIndex = this._advancePolyIndex(p, polyIndex, polyPath);
 
                 if (polyIndex >= polyPath.length) break;
+                const polyId = polyPath[polyIndex].id;
+                const h = this._getHeightOnDetail(polyId, p);
                 //如果这个样本点比前一个点高度发生足够变化，就在中间加入一个样本点
-                const h = this._getHeightOnDetail(polyPath[polyIndex].id, p);
-                if(j>0&&Math.abs(preh-h)>5)
-                {
-                    const mid={x:(p.x+prep.pos.x)/2,y:(p.y+prep.pos.y)/2,z:p.z};
-                    this.addpoint(mid,preid,polyPath,result);
-                }
+                //if(j>0&&Math.abs(preh-h)>5)
+                //{
+                //    const mid={x:(p.x+prep.pos.x)/2,y:(p.y+prep.pos.y)/2,z:p.z};
+                //    this.addpoint(mid,preid,polyPath,result);
+                //}
                 result.push({
                     pos: { x: p.x, y: p.y, z: h },
-                    mode: 1
+                    mode: PathState.WALK
                 });
                 //Instance.DebugSphere({center:{ x: p.x, y: p.y, z: h },radius:1,duration:1/32,color:{r:255,g:0,b:0}});
-                preh=h;
+                preh=p.z;
                 prep=result[result.length - 1];
             }
         }
-        // 最后一个点
-        ////result.push(funnelPath[funnelPath.length - 1]);
-        //删除起点和终点
-        return result.slice(1,result.length);
+
+        const last = funnelPath[funnelPath.length - 1];
+        if (result.length === 0 || result[result.length - 1].pos.x !== last.pos.x || result[result.length - 1].pos.y !== last.pos.y || result[result.length - 1].pos.z !== last.pos.z || result[result.length - 1].mode !== last.mode) {
+            result.push(last);
+        }
+
+        return result;
     }
 
     /* ===============================
@@ -192,10 +207,10 @@ export class FunnelHeightFixer {
         }
 
         // fallback（极少发生）
-    return p.z;
+        return p.z;
     }
-
     /**
+     * 三角形内插高度
      * @param {{ x: number; y: number; }} p
      * @param {{ x: any; y: any; z: any; }} a
      * @param {{ x: any; y: any; z: any; }} b
@@ -225,7 +240,7 @@ export class FunnelHeightFixer {
     =============================== */
 
     /**
-     * @param {{ y: number; x: number; z:0}} p
+    * @param {{ y: number; x: number; z:number}} p
      * @param {number} polyId
      */
     _pointInPolyXY(p, polyId) {
@@ -243,5 +258,35 @@ export class FunnelHeightFixer {
         const t = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
         const u = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
         return (s >= 0 && t >= 0 && u >= 0) || (s <= 0 && t <= 0 && u <= 0);
+    }
+
+    /**
+     * 优先用最近多边形推进 corridor，点一定在多边形投影内
+     * @param {{x:number,y:number,z:number}} p
+     * @param {number} startIndex
+     * @param {{id:number,mode:number}[]} polyPath
+     */
+    _advancePolyIndex(p, startIndex, polyPath) {
+
+        let bestIndex = startIndex;
+        let bestDistSq = Infinity;
+
+        for (let i = startIndex; i < startIndex+1; i++) {
+            const polyId = polyPath[i].id;
+            const poly = this.navMesh.polys[polyId];
+
+            const cp = closestPointOnPoly(p, this.navMesh.verts, poly);
+            if (!cp||!cp.in) continue;
+            cp.z = cp.z;
+            const dx = cp.x - p.x;
+            const dy = cp.y - p.y;
+            const dz = cp.z - p.z;
+            const d = dx * dx + dy * dy + dz * dz;
+            if (d < bestDistSq) {
+                bestDistSq = d;
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
     }
 }
