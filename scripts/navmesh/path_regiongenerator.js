@@ -1,6 +1,6 @@
 import { OpenHeightfield } from "./path_openheightfield";
 import { OpenSpan } from "./path_openspan";
-import { origin, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, REGION_MERGE_AREA, REGION_MIN_AREA } from "./path_const";
+import { origin, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, REGION_MIN_AREA, REGION_MERGE_AREA } from "./path_const";
 import { Instance } from "cs_script/point_script";
 
 export class RegionGenerator {
@@ -8,14 +8,13 @@ export class RegionGenerator {
      * @param {OpenHeightfield} openHeightfield
      */
     constructor(openHeightfield) {
-        /**@type {(OpenSpan|null)[][]} */
         this.hf = openHeightfield.cells;
-        /**@type {number} */
+        this.baseX = openHeightfield.baseX;
+        this.baseY = openHeightfield.baseY;
+
         this.gridX = openHeightfield.gridX;
-        /**@type {number} */
         this.gridY = openHeightfield.gridY;
-        this.regions = [];
-        /**@type {number} */
+
         this.nextRegionId = 1;
     }
 
@@ -36,82 +35,80 @@ export class RegionGenerator {
 
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        span.neighbors = [null, null, null, null];
-
                         for (let d = 0; d < 4; d++) {
                             const nx = x + dirs[d].dx;
                             const ny = y + dirs[d].dy;
-                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) continue;
+                            if (nx < 0 || ny < 0 || nx >= this.gridX || ny >= this.gridY) {
+                                OpenSpan.setNeighbor(spanId, d, 0);
+                                continue;
+                            }
 
-                            let best = null;
+                            let best = 0;
                             let bestDiff = Infinity;
-                            /**@type {OpenSpan|null} */
-                            let nspan = this.hf[nx][ny];
+                            let nspanId = this.hf[nx][ny];
 
-                            while (nspan) {
-                                if(nspan.use)
+                            while (nspanId !== 0) {
+                                if(OpenSpan.getUse(nspanId))
                                 {
-                                    if (span.canTraverseTo(nspan)) {
-                                        const diff = Math.abs(span.floor - nspan.floor);
+                                    if (OpenSpan.canTraverseTo(spanId, nspanId)) {
+                                        const diff = Math.abs(OpenSpan.getFloor(spanId) - OpenSpan.getFloor(nspanId));
                                         if (diff < bestDiff) {
-                                            best = nspan;
+                                            best = nspanId;
                                             bestDiff = diff;
                                         }
                                     }
                                 }
-                                nspan = nspan.next;
+                                nspanId = OpenSpan.getNext(nspanId);
                             }
 
-                            span.neighbors[d] = best;
+                            OpenSpan.setNeighbor(spanId, d, best);
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
-    }
-    /**
-     * 获取邻居。
-     * @param {OpenSpan} span 
-     * @param {number} dir 方向 (0:W, 1:N, 2:E, 3:S)
-     * @returns {OpenSpan|null}
-     */
-    getNeighbor(span, dir) {
-        return span.neighbors[dir];
     }
 
     /**
      * 获取对角线邻居。
      * 例如：西北 (NW) = 先向西(0)再向北(1)
-     * @param {OpenSpan} span 
+     * @param {number} spanId 
      * @param {number} dir1 
      * @param {number} dir2 
+     * @returns {number} 邻居spanId，0表示无邻居
      */
-    getDiagonalNeighbor(span, dir1, dir2) {
-        const n = span.neighbors[dir1];
-        if (n) {
-            return n.neighbors[dir2];
+    getDiagonalNeighbor(spanId, dir1, dir2) {
+        const first = OpenSpan.getNeighbor(spanId, dir1);
+        if (first !== 0) {
+            const diagonal = OpenSpan.getNeighbor(first, dir2);
+            if (diagonal !== 0) return diagonal;
         }
-        return null;
+
+        const second = OpenSpan.getNeighbor(spanId, dir2);
+        if (second !== 0) {
+            return OpenSpan.getNeighbor(second, dir1);
+        }
+
+        return 0;
     }
     //构建距离场
     buildDistanceField() {
         // 1. 初始化：边界设为0，内部设为无穷大
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
                         // 如果任意一个邻居缺失，说明是边界
-                        span.distance = this.isBorderSpan(span) ? 0 : Infinity;
+                        OpenSpan.setDistance(spanId, this.isBorderSpan(spanId) ? 0 : Infinity);
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
@@ -120,26 +117,26 @@ export class RegionGenerator {
         // 西(0)、西南(0+3)、南(3)、东南(3+2)
         for (let y = 0; y < this.gridY; y++) {
             for (let x = 0; x < this.gridX; x++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        if (span.distance > 0) {
+                        if (OpenSpan.getDistance(spanId) > 0) {
                             // 西
-                            let n = this.getNeighbor(span, 0);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            let n = OpenSpan.getNeighbor(spanId, 0);
+                            if (n !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(n) + 2));
                             // 西南
-                            let nd = this.getDiagonalNeighbor(span, 0, 3);
-                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            let nd = this.getDiagonalNeighbor(spanId, 0, 3);
+                            if (nd !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(nd) + 3));
                             // 南
-                            n = this.getNeighbor(span, 3);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            n = OpenSpan.getNeighbor(spanId, 3);
+                            if (n !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(n) + 2));
                             // 东南
-                            nd = this.getDiagonalNeighbor(span, 3, 2);
-                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            nd = this.getDiagonalNeighbor(spanId, 3, 2);
+                            if (nd !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(nd) + 3));
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
@@ -148,202 +145,234 @@ export class RegionGenerator {
         // 东(2)、东北(2+1)、北(1)、西北(1+0)
         for (let y = this.gridY - 1; y >= 0; y--) {
             for (let x = this.gridX - 1; x >= 0; x--) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        if (span.distance > 0) {
+                        if (OpenSpan.getDistance(spanId) > 0) {
                             // 东
-                            let n = this.getNeighbor(span, 2);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            let n = OpenSpan.getNeighbor(spanId, 2);
+                            if (n !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(n) + 2));
                             // 东北
-                            let nd = this.getDiagonalNeighbor(span, 2, 1);
-                            if (nd) span.distance = Math.min(span.distance, nd.distance + 3);
+                            let nd = this.getDiagonalNeighbor(spanId, 2, 1);
+                            if (nd !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(nd) + 3));
                             // 北
-                            n = this.getNeighbor(span, 1);
-                            if (n) span.distance = Math.min(span.distance, n.distance + 2);
+                            n = OpenSpan.getNeighbor(spanId, 1);
+                            if (n !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(n) + 2));
                             // 西北
-                            let nd2 = this.getDiagonalNeighbor(span, 1, 0);
-                            if (nd2) span.distance = Math.min(span.distance, nd2.distance + 3);
+                            let nd2 = this.getDiagonalNeighbor(spanId, 1, 0);
+                            if (nd2 !== 0) OpenSpan.setDistance(spanId, Math.min(OpenSpan.getDistance(spanId), OpenSpan.getDistance(nd2) + 3));
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
-        this.blurDistanceField();
-    }
-    //对距离场进行平滑处理
-    blurDistanceField() {
-        const threshold = 2; //距离阈值，小于的不进行模糊
-
-        //计算模糊后的值
+        // 第二遍扫描后，distance 场已经稳定了，可以用来做降噪了
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        //只有远离边界的体素才参与模糊
-                        if (span.distance <= threshold) span.newDist = span.distance;
-                        else {
-                            let d = span.distance;
-                            //计算平均距离
-                            for (let i = 0; i < 4; i++) {
-                                const n = span.neighbors[i];
-                                if (n) d += n.distance;
-                                else d += span.distance;
-                            }
-                            span.newDist = Math.floor((d + 2) / 5);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.newDist !== undefined) {
-                            span.distance = span.newDist;
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-    }
-    /**
-     * 计算当前span从dir方向过来的距离
-     * @param {OpenSpan} span
-     * @param {number} dir
-     */
-    sample(span, dir) {
-        const n = span.neighbors[dir];
-        if (!n) return Infinity;
+                        let all=OpenSpan.getDistance(spanId);
+                        let n = OpenSpan.getNeighbor(spanId, 0);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+                        n = OpenSpan.getNeighbor(spanId, 1);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+                        n = OpenSpan.getNeighbor(spanId, 2);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+                        n = OpenSpan.getNeighbor(spanId, 3);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
 
-        return n.distance + 2;
+                        n = this.getDiagonalNeighbor(spanId, 0,3);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+                        n = this.getDiagonalNeighbor(spanId, 0,1);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+
+                        n = this.getDiagonalNeighbor(spanId, 2,3);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+                        n = this.getDiagonalNeighbor(spanId, 2,1);
+                        if (n !== 0)all+=OpenSpan.getDistance(n);
+                        else all+=OpenSpan.getDistance(spanId);
+
+                        // 如果任意一个邻居缺失，说明是边界
+                        OpenSpan.setDenoiseDistance(spanId, all/9);
+                    }
+                    spanId = OpenSpan.getNext(spanId);
+                }
+            }
+        }
     }
 
     /**
      * 是否是边界span
-     * @param {OpenSpan} span
+     * @param {number} spanId
      */
-    isBorderSpan(span) {
+    isBorderSpan(spanId) {
         for (let d = 0; d < 4; d++) {
-            if (!span.neighbors[d]) return true;
+            if (OpenSpan.getNeighbor(spanId, d) === 0) return true;
         }
         return false;
     }
 
     //洪水扩张
     buildRegionsWatershed() {
-        const spans = [];
+        // 1) 按 denoiseDistance 收集所有可用 span，并重置 regionId
+        //    distBuckets: 下标=距离值，value=该距离上的 span 列表
+        /** @type {number[][]} */
+        const distBuckets = [];
+        let maxDist = 0;
+
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        span.regionId = 0;
-                        if (span.distance >= 0) {
-                            spans.push(span);
+                        OpenSpan.setRegionId(spanId, 0);
+                        const dist = OpenSpan.getDenoiseDistance(spanId);
+                        if (Number.isFinite(dist) && dist >= 0) {
+                            const d = Math.floor(dist);
+                            if (!distBuckets[d]) distBuckets[d] = [];
+                            distBuckets[d].push(spanId);
+                            if (d > maxDist) maxDist = d;
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
-        //从大到小排序
-        spans.sort((a, b) => b.distance - a.distance);
 
-        for (const span of spans) {
+        // 2) 生成“每隔2个距离一个批次”的批次列表（从大到小）
+        //    这里的阈值计算会自然形成：当 maxDist 为偶数时，首批包含 d-2/d-1/d
+        /** @type {number[][]} */
+        const batches = [];
+        let coveredMin = maxDist + 1;
+        let level = (maxDist + 1) & ~1;
 
-            let bestRegion = 0;
-            let maxNeighborDist = -1;
+        while (coveredMin > 0) {
+            const threshold = Math.max(level - 2, 0);
+            const batch = [];
 
-            for (let d = 0; d < 4; d++) {
-                const n = span.neighbors[d];
-                if (!n) continue;
+            for (let dist = coveredMin - 1; dist >= threshold; dist--) {
+                const list = distBuckets[dist];
+                if (list && list.length > 0) batch.push(...list);
+            }
 
-                //如果邻居已经有Region了，说明这个邻居比当前span更靠近“中心”
+            if (batch.length > 0) batches.push(batch);
 
-                if (n.regionId > 0) {
-                    if (n.distance > maxNeighborDist) {
-                        maxNeighborDist = n.distance;
-                        bestRegion = n.regionId;
+            coveredMin = threshold;
+            level = Math.max(level - 2, 0);
+        }
+
+        // 3) 逐批处理（从高距离到低距离）
+        for (const batch of batches) {
+            // batchSet 用于 O(1) 判断邻居是否仍在当前批次内
+            const batchSet = new Set(batch);
+
+            // queue 是“旧水位”的广度扩张队列（BFS）
+            // 只装入已经被赋予 region 的节点，向同批次未赋值节点扩散
+            const queue = [];
+
+            // 3.1 先尝试让本批次节点接入已有 region（来自历史批次或已处理节点）
+            for (const spanId of batch) {
+                if (OpenSpan.getRegionId(spanId) !== 0) {
+                    queue.push(spanId);
+                    continue;
+                }
+
+                let bestRegion = 0;
+                let maxNeighborDist = -1;
+
+                // 从4邻域中挑一个“最靠内”（距离更大）的已有 region 作为接入目标
+                for (let d = 0; d < 4; d++) {
+                    const n = OpenSpan.getNeighbor(spanId, d);
+                    if (n === 0) continue;
+
+                    const neighborRegion = OpenSpan.getRegionId(n);
+                    if (neighborRegion === 0) continue;
+
+                    const neighborDist = OpenSpan.getDenoiseDistance(n);
+                    if (neighborDist > maxNeighborDist) {
+                        maxNeighborDist = neighborDist;
+                        bestRegion = neighborRegion;
+                    }
+                }
+
+                if (bestRegion !== 0) {
+                    OpenSpan.setRegionId(spanId, bestRegion);
+                    queue.push(spanId);
+                }
+            }
+
+            // 3.2 旧水位 BFS：在当前批次内，把已接入的 region 尽量向外扩散
+            for (let q = 0; q < queue.length; q++) {
+                const current = queue[q];
+                const rid = OpenSpan.getRegionId(current);
+
+                for (let d = 0; d < 4; d++) {
+                    const n = OpenSpan.getNeighbor(current, d);
+                    if (n === 0) continue;
+                    if (!batchSet.has(n)) continue;
+                    if (OpenSpan.getRegionId(n) !== 0) continue;
+
+                    OpenSpan.setRegionId(n, rid);
+                    queue.push(n);
+                }
+            }
+
+            // 3.3 对仍未覆盖的节点创建新水位（新 region），并立即 DFS 泛洪
+            for (const spanId of batch) {
+                if (OpenSpan.getRegionId(spanId) !== 0) continue;
+
+                const rid = this.nextRegionId++;
+                OpenSpan.setRegionId(spanId, rid);
+
+                // stack 是“新水位”深度扩张栈（DFS）
+                const stack = [spanId];
+                while (stack.length > 0) {
+                    const current = stack.pop();
+                    if (current === undefined) break;
+
+                    for (let d = 0; d < 4; d++) {
+                        const n = OpenSpan.getNeighbor(current, d);
+                        if (n === 0) continue;
+                        if (!batchSet.has(n)) continue;
+                        if (OpenSpan.getRegionId(n) !== 0) continue;
+
+                        OpenSpan.setRegionId(n, rid);
+                        stack.push(n);
                     }
                 }
             }
-
-            if (bestRegion !== 0) span.regionId = bestRegion;
-            else span.regionId = this.nextRegionId++;
-        }
-        //this.floodRemaining();
-        //this.mergeAndFilterRegions();
-    }
-    //abandon
-    floodRemaining() {
-        //填补距离为0的边界缝隙
-        let changed = true;
-        let iterCount = 0;
-        while (changed && iterCount < 5) {
-            changed = false;
-            iterCount++;
-            for (let x = 0; x < this.gridX; x++) {
-                for (let y = 0; y < this.gridY; y++) {
-                    let span = this.hf[x][y];
-                    while (span) {
-                        if(span.use)
-                        {
-                            //如果当前没有区域
-                            if (span.regionId === 0) {
-                                let bestRegion = 0;
-                                let bestDist = -1;
-                                for (let d = 0; d < 4; d++) {
-                                    const n = span.neighbors[d];
-                                    if (n && n.regionId > 0) {
-                                        if (n.distance > bestDist) {
-                                            bestDist = n.distance;
-                                            bestRegion = n.regionId;
-                                        }
-                                    }
-                                }
-                                if (bestRegion > 0) {
-                                    span.regionId = bestRegion;
-                                    changed = true;
-                                }
-                            }
-                        }
-                        span = span.next;
-                    }
-                }
-            }
         }
     }
-
     //合并过滤小region
     mergeAndFilterRegions() {
-        /**@type {Map<number,OpenSpan[]>} */
+        /**@type {Map<number,number[]>} */
         const regionSpans = new Map();
 
         //统计每个region包含的span
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        if (span.regionId > 0) {
-                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                            regionSpans.get(span.regionId)?.push(span);
+                        if (OpenSpan.getRegionId(spanId) > 0) {
+                            if (!regionSpans.has(OpenSpan.getRegionId(spanId))) regionSpans.set(OpenSpan.getRegionId(spanId), []);
+                            regionSpans.get(OpenSpan.getRegionId(spanId))?.push(spanId);
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
@@ -351,13 +380,13 @@ export class RegionGenerator {
         for (const [id, spans] of regionSpans) {
             if (spans.length >= REGION_MERGE_AREA) continue;
             const neighbors = new Map();
-            for (const span of spans) {
+            for (const spanId of spans) {
                 for (let d = 0; d < 4; d++) {
-                    const n = span.neighbors[d];
-                    if (n && n.regionId !== id) {
+                    const n = OpenSpan.getNeighbor(spanId, d);
+                    if (n !== 0 && OpenSpan.getRegionId(n) !== id) {
                         neighbors.set(
-                            n.regionId,
-                            (neighbors.get(n.regionId) ?? 0) + 1
+                            OpenSpan.getRegionId(n),
+                            (neighbors.get(OpenSpan.getRegionId(n)) ?? 0) + 1
                         );
                     }
                 }
@@ -373,9 +402,9 @@ export class RegionGenerator {
             }
 
             if (best > 0) {
-                for (const span of spans) {
-                    span.regionId = best;
-                    regionSpans.get(span.regionId)?.push(span);
+                for (const spanId of spans) {
+                    OpenSpan.setRegionId(spanId, best);
+                    regionSpans.get(OpenSpan.getRegionId(spanId))?.push(spanId);
                 }
                 regionSpans.set(id, []);
             }
@@ -384,89 +413,24 @@ export class RegionGenerator {
         regionSpans.clear();
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        if (span.regionId > 0) {
-                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                            regionSpans.get(span.regionId)?.push(span);
+                        if (OpenSpan.getRegionId(spanId) > 0) {
+                            if (!regionSpans.has(OpenSpan.getRegionId(spanId))) regionSpans.set(OpenSpan.getRegionId(spanId), []);
+                            regionSpans.get(OpenSpan.getRegionId(spanId))?.push(spanId);
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
         //忽略过小的region
         for (const [id, spans] of regionSpans) {
             if (spans.length >= REGION_MIN_AREA) continue;
-            for (const span of spans) {
-                if (span.regionId == id) span.regionId = 0;
-            }
-        }
-    }
-    //abandon
-    smooth() {
-        /**@type {Map<number,OpenSpan[]>} */
-        const regionSpans = new Map();
-        //统计每个region包含的span
-        for (let x = 0; x < this.gridX; x++) {
-            for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
-                    {
-                        if (span.regionId > 0) {
-                            if (!regionSpans.has(span.regionId)) regionSpans.set(span.regionId, []);
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                    }
-                    span = span.next;
-                }
-            }
-        }
-        for (const [id, spans] of regionSpans) {
-            const neighbors = new Map();
-            let smoth = true;
-            while (smoth) {
-                smoth = false;
-                let diff = 0;
-                let df = [];
-                outer:
-                for (const span of spans) {
-                    if (span.regionId != id) continue;
-                    for (let d = 0; d < 4; d++) {
-                        const n = span.neighbors[d];
-                        if (n && n.regionId !== id) {
-                            df[diff] = n.regionId;
-                            diff++;
-                        }
-                    }
-                    if (diff == 3) {
-                        //这个span周围有三个不同于自身的区域
-                        if (df[0] == df[1]) {
-                            span.regionId = df[0];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        else if (df[1] == df[2]) {
-                            span.regionId = df[1];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        else if (df[0] == df[2]) {
-                            span.regionId = df[0];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        else {
-                            //四个区域不相同加入旁边
-                            span.regionId = df[0];
-                            regionSpans.get(span.regionId)?.push(span);
-                        }
-                        smoth = true;
-                        break outer;
-                    }
-                }
+            for (const spanId of spans) {
+                if (OpenSpan.getRegionId(spanId) == id) OpenSpan.setRegionId(spanId, 0);
             }
         }
     }
@@ -490,29 +454,28 @@ export class RegionGenerator {
 
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        if (span.regionId > 0) {
-                            const c = randomColor(span.regionId);
+                        if (OpenSpan.getRegionId(spanId) > 0) {
+                            const c = randomColor(OpenSpan.getRegionId(spanId));
 
                             const center = {
-                                x: origin.x + (x + 0.5) * MESH_CELL_SIZE_XY,
-                                y: origin.y + (y + 0.5) * MESH_CELL_SIZE_XY,
-                                z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                                x: origin.x + (this.baseX + x + 0.5) * MESH_CELL_SIZE_XY,
+                                y: origin.y + (this.baseY + y + 0.5) * MESH_CELL_SIZE_XY,
+                                z: origin.z + OpenSpan.getFloor(spanId) * MESH_CELL_SIZE_Z
                             };
 
                             Instance.DebugSphere({
                                 center,
-                                radius: MESH_CELL_SIZE_XY * 0.3,
+                                radius: 3,
                                 color: c,
                                 duration
                             });
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
@@ -525,27 +488,25 @@ export class RegionGenerator {
 
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        maxDist = Math.max(maxDist, span.distance);
+                        maxDist = Math.max(maxDist, OpenSpan.getDistance(spanId));
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }
 
         for (let x = 0; x < this.gridX; x++) {
             for (let y = 0; y < this.gridY; y++) {
-                /**@type {OpenSpan|null} */
-                let span = this.hf[x][y];
-                while (span) {
-                    if(span.use)
+                let spanId = this.hf[x][y];
+                while (spanId !== 0) {
+                    if(OpenSpan.getUse(spanId))
                     {
-                        if (span.distance < Infinity) {
-                            const t = span.distance / maxDist;
+                        if (OpenSpan.getDistance(spanId) < Infinity) {
+                            const t = OpenSpan.getDistance(spanId) / maxDist;
                             const c = {
                                 r: Math.floor(255 * t),
                                 g: Math.floor(255 * (1 - t)),
@@ -554,17 +515,17 @@ export class RegionGenerator {
 
                             Instance.DebugSphere({
                                 center: {
-                                    x: origin.x + x * MESH_CELL_SIZE_XY,
-                                    y: origin.y + y * MESH_CELL_SIZE_XY,
-                                    z: origin.z + span.floor * MESH_CELL_SIZE_Z
+                                    x: origin.x + (this.baseX + x) * MESH_CELL_SIZE_XY,
+                                    y: origin.y + (this.baseY + y) * MESH_CELL_SIZE_XY,
+                                    z: origin.z + OpenSpan.getFloor(spanId) * MESH_CELL_SIZE_Z
                                 },
-                                radius: MESH_CELL_SIZE_XY * 0.25,
+                                radius: 3,
                                 color: c,
                                 duration
                             });
                         }
                     }
-                    span = span.next;
+                    spanId = OpenSpan.getNext(spanId);
                 }
             }
         }

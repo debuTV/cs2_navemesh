@@ -1,27 +1,24 @@
-import { Instance } from "cs_script/point_script";
-import { ASTAR_HEURISTIC_SCALE, ASTAR_OPTIMIZATION_1, closestPointOnPoly, MAX_JUMP_HEIGHT, MESH_CELL_SIZE_Z } from "./path_const";
+﻿import { Instance } from "cs_script/point_script";
+import { ASTAR_HEURISTIC_SCALE, ASTAR_OPTIMIZATION_1, PathState } from "./path_const";
 import { FunnelHeightFixer } from "./path_funnelheightfixer";
+import { Tool } from "./util/tool";
+
+/** @typedef {import("./path_manager").NavMeshMesh} NavMeshMesh */
+/** @typedef {import("./path_manager").NavMeshLink} NavMeshLink */
+/** @typedef {import("cs_script/point_script").Vector} Vector */
 
 export class PolyGraphAStar {
     /**
-     * @param {{verts: {x: number;y: number;z: number;}[];polys: number[][];regions: number[];neighbors: number[][];}} polys
-     * @param {{PolyA: number;PolyB: number;PosA: import("cs_script/point_script").Vector;PosB: import("cs_script/point_script").Vector;cost: number;type: number;}[]} links
+    * @param {NavMeshMesh} polys
+    * @param {Map<number,NavMeshLink[]>} links
      * @param {FunnelHeightFixer} heightfixer
      */
     constructor(polys, links, heightfixer) {
         this.mesh = polys;
         this.polyCount = polys.polys.length;
-        /**@type {Map<number,{PolyA: number; PolyB: number; PosA: import("cs_script/point_script").Vector; PosB: import("cs_script/point_script").Vector; cost: number; type: number;}[]>} */
-        this.links = new Map();
+        /**@type {Map<number,NavMeshLink[]>} */
+        this.links = links;
         this.heightfixer = heightfixer;
-        for (const link of links) {
-            const polyA = link.PolyA;
-            const polyB = link.PolyB;
-            if (!this.links.has(polyA)) this.links.set(polyA, []);
-            if (!this.links.has(polyB)) this.links.set(polyB, []);
-            this.links.get(polyA)?.push(link);
-            this.links.get(polyB)?.push(link);
-        }
         //预计算中心点
         this.centers = new Array(this.polyCount);
         for (let i = 0; i < this.polyCount; i++) {
@@ -50,13 +47,7 @@ export class PolyGraphAStar {
         }
 
         this.heuristicScale = ASTAR_HEURISTIC_SCALE;
-        Instance.Msg("多边形总数：" + this.polyCount + "跳点数：" + links.length);
         this.open = new MinHeap(this.polyCount);
-
-        //查询所在多边形优化
-        this.spatialCellSize = 256;
-        this.spatialGrid = new Map();
-        this.buildSpatialIndex();
     }
 
     /**
@@ -64,89 +55,18 @@ export class PolyGraphAStar {
      * @param {import("cs_script/point_script").Vector} end
      */
     findPath(start, end) {
-        const startPoly = this.findNearestPoly(start);
-        const endPoly = this.findNearestPoly(end);
+        const startPoly = Tool.findNearestPoly(start, this.mesh,this.heightfixer);
+        const endPoly = Tool.findNearestPoly(end, this.mesh,this.heightfixer);
         //Instance.Msg(startPoly.poly+"   "+endPoly.poly);
         if (startPoly.poly < 0 || endPoly.poly < 0) {
             Instance.Msg(`跑那里去了?`);
             return { start: startPoly.pos, end: endPoly.pos, path: [] };
         }
 
-        if (startPoly == endPoly) {
+        if (startPoly.poly == endPoly.poly) {
             return { start: startPoly.pos, end: endPoly.pos, path: [{ id: endPoly.poly, mode: 1 }] };
         }
         return { start: startPoly.pos, end: endPoly.pos, path: this.findPolyPath(startPoly.poly, endPoly.poly) };
-    }
-    buildSpatialIndex() {
-        for (let i = 0; i < this.mesh.polys.length; i++) {
-            const poly = this.mesh.polys[i];
-
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const vi of poly) {
-                const v = this.mesh.verts[vi];
-                if (v.x < minX) minX = v.x;
-                if (v.y < minY) minY = v.y;
-                if (v.x > maxX) maxX = v.x;
-                if (v.y > maxY) maxY = v.y;
-            }
-
-            const x0 = Math.floor(minX / this.spatialCellSize);
-            const x1 = Math.ceil(maxX / this.spatialCellSize);
-            const y0 = Math.floor(minY / this.spatialCellSize);
-            const y1 = Math.ceil(maxY / this.spatialCellSize);
-
-            for (let x = x0; x <= x1; x++) {
-                for (let y = y0; y <= y1; y++) {
-                    const key = `${x}_${y}`;
-                    if (!this.spatialGrid.has(key)) this.spatialGrid.set(key, []);
-                    this.spatialGrid.get(key).push(i);
-                }
-            }
-        }
-    }
-    /**
-     * 返回包含点的 poly index，找不到返回 -1
-     * @param {{x:number,y:number,z:number}} p
-     */
-    findNearestPoly(p) {
-        const extents = MAX_JUMP_HEIGHT * MESH_CELL_SIZE_Z;//高度误差
-        let bestPoly = -1;
-        let bestDist = Infinity;
-        let bestPos = p;
-        const x = Math.floor(p.x / this.spatialCellSize);
-        const y = Math.floor(p.y / this.spatialCellSize);
-        for (let i = -1; i <= 1; i++) {
-            for (let j = -1; j <= 1; j++) {
-                const key = `${x + i}_${y + j}`;
-                //const key = `${x}_${y}`;
-                const candidates = this.spatialGrid.get(key);
-                if (!candidates) continue;
-                //if (!candidates) return{pos:bestPos,poly:bestPoly};
-                for (const polyIdx of candidates) {
-                    const poly = this.mesh.polys[polyIdx];
-                    const cp = closestPointOnPoly(p, this.mesh.verts, poly);
-                    if (!cp) continue;
-
-                    if (cp.in == true) {
-                        const h = this.heightfixer._getHeightOnDetail(polyIdx, p);
-                        cp.z = h;
-                    }
-                    //Instance.DebugSphere({center:{x:cp.x,y:cp.y,z:cp.z},radius:2,duration:1,color:{r:255,g:0,b:0}});
-                    const dx = cp.x - p.x;
-                    const dy = cp.y - p.y;
-                    const dz = cp.z - p.z;
-                    const d = dx * dx + dy * dy + dz * dz;
-
-                    if (d < bestDist) {
-                        bestDist = d;
-                        bestPoly = polyIdx;
-                        bestPos = cp;
-                    }
-                }
-            }
-        }
-
-        return { pos: bestPos, poly: bestPoly };
     }
     /**
      * @param {number} start
@@ -183,21 +103,22 @@ export class PolyGraphAStar {
 
             const neighbors = this.mesh.neighbors[current];
             for (let i = 0; i < neighbors.length; i++) {
-                const n = neighbors[i];
-                if (n < 0 || state[n] == 2) continue;
-                // @ts-ignore
-                const tentative = g[current] + this.distsqr(current, n);
-                if (tentative < g[n]) {
-                    parent[n] = current;
-                    walkMode[n] = 1;
-                    g[n] = tentative;
+                for (const n of neighbors[i]) {
+                    if (n < 0 || state[n] == 2) continue;
                     // @ts-ignore
-                    const f = tentative + this.distsqr(n, end) * this.heuristicScale;
-                    if (state[n] != 1) {
-                        open.push(n, f);
-                        state[n] = 1;
+                    const tentative = g[current] + this.distsqr(current, n);
+                    if (tentative < g[n]) {
+                        parent[n] = current;
+                        walkMode[n] = PathState.WALK;
+                        g[n] = tentative;
+                        // @ts-ignore
+                        const f = tentative + this.distsqr(n, end) * this.heuristicScale;
+                        if (state[n] != 1) {
+                            open.push(n, f);
+                            state[n] = 1;
+                        }
+                        else open.update(n, f);
                     }
-                    else open.update(n, f);
                 }
             }
             if (!this.links.has(current)) continue;
@@ -213,7 +134,7 @@ export class PolyGraphAStar {
                     // @ts-ignore
                     const f = g[v] + this.distsqr(v, end) * this.heuristicScale;
                     parent[v] = current;
-                    walkMode[v] = 2;
+                    walkMode[v] = link.type;
                     if (state[v] != 1) {
                         open.push(v, f);
                         state[v] = 1;
@@ -250,7 +171,7 @@ export class PolyGraphAStar {
         const dx = pa.x - pb.x;
         const dy = pa.y - pb.y;
         const dz = pa.z - pb.z;
-        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        return dx * dx + dy * dy + dz * dz;
     }
 }
 class MinHeap {
@@ -303,7 +224,7 @@ class MinHeap {
      */
     update(node, cost) {
         const i = this.index[node];
-        if (i == null) return;
+        if (i < 0) return;
         this.costs[i] = cost;
         this._up(i);
     }
