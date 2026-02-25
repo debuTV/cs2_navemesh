@@ -42,7 +42,7 @@ export class NVplugin {
             const sp=name.split("_");
             if(sp.length<3)return;
             if(sp[1]=="default")this.setTile(sp[1],sp.slice(2),true);
-            this.setTile(sp[1],sp.slice(2));
+            else this.setTile(sp[1],sp.slice(2));
         });
     }
     /**
@@ -124,7 +124,6 @@ export class NVplugin {
             {
                 k=k.replace("-","_");
                 const td=this.deftiles.get(k);
-                this.addTile(name,[k]);
                 if(!td)continue;
                 //这里替换数据
                 this.tileManager.updatetile(k,td.tx,td.ty,td.mesh,td.detail,td.links);
@@ -141,7 +140,7 @@ export class NVplugin {
                 if(!td)
                 {
                     this.addTile(name,[k]);
-                    td=this.tiles.get(k);
+                    td=this.tiles.get(name+"_"+k);
                 }
                 if(!td)continue;
                 //这里替换数据
@@ -153,4 +152,5 @@ export class NVplugin {
         let end = new Date();
         Instance.Msg(`导航初始化完成,耗时${end.getTime()-start.getTime()}ms`);
     }
+
 }
