@@ -1,5 +1,5 @@
 import { Instance } from "cs_script/point_script";
-import { MESH_CELL_SIZE_XY, MESH_WORLD_SIZE_XY, origin, MESH_DEBUG, REGION_DEBUG, CONTOUR_DEBUG, TILE_PADDING, TILE_SIZE, LADDER, POLY_DEBUG } from "./path_const";
+import { MESH_CELL_SIZE_XY, MESH_WORLD_SIZE_XY, origin, MESH_DEBUG, REGION_DEBUG, CONTOUR_DEBUG, TILE_PADDING, TILE_SIZE, LADDER, POLY_DEBUG, POLY_DETAIL_DEBUG, LINK_DEBUG } from "./path_const";
 import { OpenHeightfield } from "./path_openheightfield";
 import { OpenSpan } from "./path_openspan";
 import { RegionGenerator } from "./path_regiongenerator";
@@ -104,35 +104,34 @@ export class tile {
         const tileMesh = this.polyMeshGenerator.return();
         if (this.polyMeshGenerator.error) tileHasError = true;
         timing.poly += nowMs() - phaseStartMs;
-        if (POLY_DEBUG) {
-            this.polyMeshGenerator.debugDrawPolys(tileDebugDuration);
-            this.polyMeshGenerator.debugDrawAdjacency(tileDebugDuration);
-        }
+        //if (POLY_DEBUG) {
+        //    this.polyMeshGenerator.debugDrawPolys(tileDebugDuration);
+        //    this.polyMeshGenerator.debugDrawAdjacency(tileDebugDuration);
+        //}
 
+        phaseStartMs = nowMs();
+
+        this.polidetail = new PolyMeshDetailBuilder(tileMesh, this.hf);
         /** @type {NavMeshDetail} */
-        let tileDetail = { verts: [], tris: [], triTopoly: [], meshes: [] };
-        if (tileMesh.polys.length > 0) {
-            phaseStartMs = nowMs();
+        let tileDetail = this.polidetail.init();
+        //if(POLY_DETAIL_DEBUG)
+        //{
+        //    this.polidetail.debugDrawPolys(tileDebugDuration);
+        //}
+        if (this.polidetail.error) tileHasError = true;
+        timing.detail += nowMs() - phaseStartMs;
 
-            this.polidetail = new PolyMeshDetailBuilder(tileMesh, this.hf);
-            tileDetail = this.polidetail.init();
-
-            if (this.polidetail.error) tileHasError = true;
-            timing.detail += nowMs() - phaseStartMs;
-        }
-
+        phaseStartMs = nowMs();
+        this.jumplinkbuilder = new JumpLinkBuilder(tileMesh);
         /**
-         * @type {NavMeshLink[]}
+         * @type {NavMeshLink}
          */
-        let tileLinks = [];
-        if (tileMesh.polys.length > 0) {
-            phaseStartMs = nowMs();
-            
-            this.jumplinkbuilder = new JumpLinkBuilder(tileMesh);
-            tileLinks = this.jumplinkbuilder.init();
-
-            timing.jumpLinks += nowMs() - phaseStartMs;
-        }
+        let tileLinks = this.jumplinkbuilder.init();
+        //if(LINK_DEBUG)
+        //{
+        //    this.jumplinkbuilder.debugDraw(tileDebugDuration);
+        //}
+        timing.jumpLinks += nowMs() - phaseStartMs;
 
         OpenSpan.clearRange(1, this.hf.SPAN_ID + 2);
         const tileCostMs = nowMs() - tileStartMs;

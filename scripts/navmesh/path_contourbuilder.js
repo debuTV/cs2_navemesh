@@ -150,7 +150,7 @@ export class ContourBuilder {
                                     if (contour && contour.length >= 3) {
                                         //外轮廓：逆时针（CCW）
                                         //洞轮廓：顺时针（CW）
-                                        contour = this.simplifyContour(contour);
+                                        contour = this.splitLongEdges(this.simplifyContour(contour));
                                         if (!contour || contour.length < 2) continue;
 
                                         if (!this.isDegenerateContour(contour) && contour.length >= 3) {
@@ -251,7 +251,6 @@ export class ContourBuilder {
                 const idx = indexByPoint.get(p);
                 if (idx !== undefined) outIndices.push(idx);
             }
-            this.splitLongEdges(pts, outIndices);
             return outIndices.map((idx) => pts[idx]);
         }
 
@@ -387,54 +386,39 @@ export class ContourBuilder {
     }
 
     /**
-     * @param {Contour[]} pts
-     * @param {number[]} simplified
+     * @param {Contour[]} counter
      */
-    splitLongEdges(pts, simplified) {
+    splitLongEdges(counter) {
         const maxEdgeLen = this.getContourMaxEdgeLen();
-        if (maxEdgeLen <= 0) return;
+        if (maxEdgeLen <= 0) return counter;
 
         let guard = 0;
-        while (guard++ < pts.length * 8) {
+        while (guard++ < counter.length * 8) {
             let inserted = false;
-            for (let i = 0; i < simplified.length; i++) {
-                const i0 = simplified[i];
-                const i1 = simplified[(i + 1) % simplified.length];
-                const dx = Math.abs(pts[i1].x - pts[i0].x);
-                const dy = Math.abs(pts[i1].y - pts[i0].y);
+            for (let i = 0; i < counter.length; i++) {
+                const i0 = counter[i];
+                const i1 = counter[(i + 1) % counter.length];
+                const dx = Math.abs(i1.x - i0.x);
+                const dy = Math.abs(i1.y - i0.y);
                 if (Math.max(dx, dy) <= maxEdgeLen) continue;
+                //这里在counter插入新点，值为两端点的中点
+                const newPoint = {
+                    x: (i0.x + i1.x) * 0.5,
+                    y: (i0.y + i1.y) * 0.5,
+                    z: (i0.z + i1.z) * 0.5,
+                    regionId: i0.regionId,
+                    neighborRegionId: i0.neighborRegionId
+                };
 
-                const mid = this.pickMidIndexOnArc(pts.length, i0, i1);
-                if (mid === -1) continue;
-                simplified.splice(i + 1, 0, mid);
+                // 如果你的 counter/contour 存的是点对象：
+                counter.splice(i + 1, 0, newPoint);
                 inserted = true;
                 break;
             }
             if (!inserted) break;
         }
+        return counter;
     }
-
-    /**
-     * @param {number} n
-     * @param {number} i0
-     * @param {number} i1
-     */
-    pickMidIndexOnArc(n, i0, i1) {
-        let steps = 0;
-        let i = (i0 + 1) % n;
-        while (i !== i1) {
-            steps++;
-            i = (i + 1) % n;
-        }
-        if (steps <= 1) return -1;
-        const half = Math.floor(steps / 2);
-        i = (i0 + 1) % n;
-        for (let s = 0; s < half; s++) {
-            i = (i + 1) % n;
-        }
-        return i;
-    }
-
     /**
      * @param {Contour[]} contour
      */
