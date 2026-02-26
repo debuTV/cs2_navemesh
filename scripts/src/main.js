@@ -53,7 +53,7 @@ function init()
 let start={x:3457,y:-984,z:-352};
 let end={x:-2960,y:-625,z:-416};
 let pd=false;
-//let sss=false;
+let sss=true;
 let ttt=0;
 Instance.SetThink(() => {
     if(pd==true)
@@ -73,22 +73,22 @@ Instance.SetThink(() => {
         //        }
         //    }
         //})
-        //pathfinder.tick();
-        //ttt++;
-        //if(ttt%64==0)pathfinder.debug(1);
+        pathfinder.tick();
+        ttt++;
+        if(ttt%32==0)pathfinder.debug(1);
         for(let i=0;i<1;i++)pathfinder.findPath(start,end);
     }
-    Instance.SetNextThink(Instance.GetGameTime()+1/1);
+    Instance.SetNextThink(Instance.GetGameTime()+1/32);
 });
-Instance.SetNextThink(Instance.GetGameTime()+1/1);
+Instance.SetNextThink(Instance.GetGameTime()+1/32);
 Instance.OnBulletImpact((event)=>{
-    let start = new Date();
-    pathfinder.update(event.position);
-    let end = new Date();
-    Instance.Msg(`导航更新完成,耗时${end.getTime()-start.getTime()}ms`);
+    //let start = new Date();
+    ////pathfinder.update(event.position);
+    //let end = new Date();
+    //Instance.Msg(`导航更新完成,耗时${end.getTime()-start.getTime()}ms`);
     //pathfinder.debug(30);
-    //if(sss)end=event.position;
-    //else start=event.position;
+    if(sss)end=event.position;
+    else start=event.position;
     //sss=!sss;
     //pathfinder.findPath(start,end);
     //pathfinder.findPath(start,end);
@@ -105,7 +105,7 @@ Instance.OnPlayerChat((event) => {
         //多边形总数: 651  跳点总数: 91
         //多边形总数: 635  跳点总数: 78
         Instance.Msg("开始调试");
-        for(let i=0;i<1;i++)pathfinder.findPath(start,end);
+        //for(let i=0;i<1;i++)pathfinder.findPath(start,end);
         //pathfinder.debug(60);
         //pathfinder.debugTools.debug(60);
         //pathfinder.debugTools.testinit();

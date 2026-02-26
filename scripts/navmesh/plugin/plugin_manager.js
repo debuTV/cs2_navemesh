@@ -138,7 +138,6 @@ export class NVplugin {
     }
     tick()
     {
-        let start=new Date();
         switch(this.up)
         {
             case 0:
@@ -175,18 +174,10 @@ export class NVplugin {
             case 4:
                 //3ms
                 Tool.buildSpatialIndex(this.tileManager.mesh);
-                this.up++;
-                break;
-            case 5:
-                //2ms
                 this.tileManager.supprlink= this.tileManager.buildSupperLinksForMesh(this.tileManager.mesh);
                 let merged = this.tileManager.copyLinks(this.tileManager.baseLinks, this.tileManager.Extlink);
                 merged = this.tileManager.copyLinks(merged, this.tileManager.supprlink);
                 this.tileManager.links = merged;
-                this.up++;
-                break;
-            case 6:
-                //7ms
                 if(TILE_OPTIMIZATION_1)this.tileManager.pruneUnreachablePolys();
                 this.tileManager.updatemesh();
                 this.nav._refreshRuntime();
@@ -197,8 +188,6 @@ export class NVplugin {
                 this.up=0;
                 break;
         }
-        let end=new Date();
-        if(this.up>0)Instance.Msg(`${this.up} ${end.getTime() - start.getTime()} ms`);
     }
     /**
      * @param {string} name

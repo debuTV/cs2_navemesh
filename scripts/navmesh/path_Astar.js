@@ -186,7 +186,7 @@ export class PolyGraphAStar {
         const dx = pa.x - pb.x;
         const dy = pa.y - pb.y;
         const dz = pa.z - pb.z;
-        return dx * dx + dy * dy + dz * dz;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 }
 class MinHeap {

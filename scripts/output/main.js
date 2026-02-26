@@ -480,12 +480,22 @@ class FunnelHeightFixer {
         let bestIndex = startIndex;
 
         for (let i = startIndex; i <= polyPath.length-1; i++) {
-            const polyId = polyPath[i].id;
-            const start = this.navMesh.polys[polyId * 2];
-            const end = this.navMesh.polys[polyId * 2 + 1];
+            const polyId2 = polyPath[i].id<<1;
+            const start = this.navMesh.polys[polyId2];
+            const end = this.navMesh.polys[polyId2 + 1];
             const cp = closestPointOnPoly(p, this.navMesh.verts, start, end);
             if (!cp||!cp.in) continue;
             return i;
+            //cp.z = cp.z;
+            //const dx = cp.x - p.x;
+            //const dy = cp.y - p.y;
+            //const dz = cp.z - p.z;
+            //const d = dx * dx + dy * dy + dz * dz;
+            //if (d < bestDistSq) {
+            //    bestDistSq = d;
+            //    bestIndex = i;
+            //    return i; // 直接返回第一个找到的点，因为点一定在多边形投影内，不需要继续找了
+            //}
         }
         return bestIndex;
     }
@@ -706,8 +716,9 @@ class Tool {
      * @param {Vector} p
      * @param {NavMeshMesh} mesh
      * @param {FunnelHeightFixer}[heightfixer]
+     * @param {boolean} [findall=false] 
      */
-    static findNearestPoly(p, mesh, heightfixer) {
+    static findNearestPoly(p, mesh, heightfixer,findall=false) {
         //Instance.DebugSphere({center:{x:p.x,y:p.y,z:p.z},radius:2,duration:30,color:{r:255,g:255,b:255}});
         if (gridW <= 0 || gridH <= 0 || cellStart.length === 0) {
             return { pos: p, poly: -1 };
@@ -756,7 +767,7 @@ class Tool {
                     }
                 }
             }
-            if(inpoly)break;
+            if(inpoly&& !findall)break;
         }
         return { pos: bestPos, poly: bestPoly };
     }
@@ -1146,7 +1157,7 @@ class PolyGraphAStar {
         const dx = pa.x - pb.x;
         const dy = pa.y - pb.y;
         const dz = pa.z - pb.z;
-        return dx * dx + dy * dy + dz * dz;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 }
 class MinHeap {
@@ -1250,6 +1261,257 @@ class MinHeap {
         this.nodes[b] = na;
         this.index[na] = b;
         this.index[nb] = a;
+    }
+}
+
+/** @typedef {import("cs_script/point_script").Vector} Vector */
+
+/**
+ * vec: 轻量向量工具类（无状态静态方法）。
+ *
+ * 约定：
+ * - 不修改传入参数，所有方法返回新对象或标量
+ * - `2D` 后缀表示仅计算 XY 分量（通常保留原 z 或返回 z=0）
+ */
+class vec {
+    /**
+     * 三维向量加法。
+     *
+     * @param {Vector} a
+     * @param {Vector} b
+     * @returns {Vector}
+     */
+    static add(a, b) {
+        return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+    }
+
+    /**
+     * 二维向量加法（仅累加 XY，z 保留 a.z）。
+     *
+     * @param {Vector} a
+     * @param {Vector} b
+     * @returns {Vector}
+     */
+    static add2D(a, b) {
+        return { x: a.x + b.x, y: a.y + b.y, z: a.z };
+    }
+
+    /**
+     * 三维向量减法。
+     *
+     * @param {Vector} a
+     * @param {Vector} b
+     * @returns {Vector}
+     */
+    static sub(a, b) {
+        return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+    }
+
+    /**
+     * 三维向量按标量缩放。
+     *
+     * @param {Vector} a
+     * @param {number} s
+     * @returns {Vector}
+     */
+    static scale(a, s) {
+        return { x: a.x * s, y: a.y * s, z: a.z * s };
+    }
+
+    /**
+     * 二维向量按标量缩放（仅缩放 XY，z 保留 a.z）。
+     *
+     * @param {Vector} a
+     * @param {number} s
+     * @returns {Vector}
+     */
+    static scale2D(a, s) {
+        return {
+            x: a.x * s,
+            y: a.y * s,
+            z: a.z
+        };
+    }
+
+    /**
+     * 构造一个向量对象。
+     *
+     * @param {number} [x]
+     * @param {number} [y]
+     * @param {number} [z]
+     * @returns {Vector}
+     */
+    static get(x = 0, y = 0, z = 0) {
+        return { x, y, z };
+    }
+
+    /**
+     * 克隆向量。
+     *
+     * @param {Vector} a
+     * @returns {Vector}
+     */
+    static clone(a) {
+        return { x: a.x, y: a.y, z: a.z };
+    }
+
+    /**
+     * 计算三维欧氏距离。
+     * b 缺省时按原点处理。
+     *
+     * @param {Vector} a
+     * @param {Vector} [b]
+     * @returns {number}
+     */
+    static length(a, b = { x: 0, y: 0, z: 0 }) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dz = a.z - b.z;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    /**
+     * 计算三维欧氏距离平方。
+     * b 缺省时按原点处理。
+     *
+     * @param {Vector} a
+     * @param {Vector} [b]
+     * @returns {number}
+     */
+    static lengthsq(a, b = { x: 0, y: 0, z: 0 }) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dz = a.z - b.z;
+        return dx * dx + dy * dy + dz * dz;
+    }
+    /**
+     * 计算二维欧氏距离（仅 XY）。
+     * b 缺省时按原点处理。
+     *
+     * @param {Vector} a
+     * @param {Vector} [b]
+     * @returns {number}
+     */
+    static length2D(a, b = { x: 0, y: 0, z: 0 }) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    /**
+     * 计算二维欧氏距离平方（仅 XY）。
+     * b 缺省时按原点处理。
+     *
+     * @param {Vector} a
+     * @param {Vector} [b]
+     * @returns {number}
+     */
+    static length2Dsq(a, b = { x: 0, y: 0, z: 0 }) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        return dx * dx + dy * dy;
+    }
+    /**
+     * 返回点在 Z 轴上偏移后的新坐标。
+     *
+     * @param {Vector} pos
+     * @param {number} height
+     * @returns {Vector}
+     */
+    static Zfly(pos, height) {
+        return { x: pos.x, y: pos.y, z: pos.z + height };
+    }
+
+    /**
+     * 输出向量坐标到游戏消息。
+     *
+     * @param {Vector} pos
+     */
+    static msg(pos) {
+        Instance.Msg(`{${pos.x} ${pos.y} ${pos.z}}`);
+    }
+
+    /**
+     * 三维点积。
+     *
+     * @param {Vector} a
+     * @param {Vector} b
+     * @returns {number}
+     */
+    static dot(a, b) {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
+    /**
+     * 二维点积（仅 XY）。
+     *
+     * @param {Vector} a
+     * @param {Vector} b
+     * @returns {number}
+     */
+    static dot2D(a, b) {
+        return a.x * b.x + a.y * b.y;
+    }
+
+    /**
+     * 三维叉积。
+     *
+     * @param {Vector} a
+     * @param {Vector} b
+     * @returns {Vector}
+     */
+    static cross(a, b) {
+        return {
+            x: a.y * b.z - a.z * b.y,
+            y: a.z * b.x - a.x * b.z,
+            z: a.x * b.y - a.y * b.x
+        };
+    }
+
+    /**
+     * 三维单位化。
+     * 当长度过小（<1e-6）时返回零向量，避免除零。
+     *
+     * @param {Vector} a
+     * @returns {Vector}
+     */
+    static normalize(a) {
+        const len = this.length(a);
+        if (len < 1e-6) {
+            return { x: 0, y: 0, z: 0 };
+        }
+        return this.scale(a, 1 / len);
+    }
+
+    /**
+     * 二维单位化（仅 XY，返回 z=0）。
+     * 当长度过小（<1e-6）时返回零向量。
+     *
+     * @param {Vector} a
+     * @returns {Vector}
+     */
+    static normalize2D(a) {
+        const len = this.length2D(a);
+        if (len < 1e-6) {
+            return { x: 0, y: 0, z: 0 };
+        }
+        return {
+            x: a.x / len,
+            y: a.y / len,
+            z: 0
+        };
+    }
+
+    /**
+     * 判断是否为近似零向量。
+     *
+     * @param {Vector} a
+     * @returns {boolean}
+     */
+    static isZero(a) {
+        return (
+            Math.abs(a.x) < 1e-6 &&
+            Math.abs(a.y) < 1e-6 &&
+            Math.abs(a.z) < 1e-6
+        );
     }
 }
 
@@ -1399,55 +1661,127 @@ class FunnelPath {
 
     /**
     * 寻找两个多边形的公共边
+    * 再把这条边投影到 pb 的各条边上，取真正共线且重叠的片段
      * @param {number} pa
     * @param {number} pb
      * @param {number} funnelDistance
      */
     findPortal(pa, pb, funnelDistance) {
-        const startVert = this.mesh.polys[pa * 2];
-        const endVert = this.mesh.polys[pa * 2 + 1];
-        const vertCount = endVert - startVert + 1;
-        if (vertCount <= 0) return;
-        const neigh = this.mesh.neighbors[pa];
-        if (!neigh) return;
+        const startA = this.mesh.polys[pa * 2];
+        const endA = this.mesh.polys[pa * 2 + 1];
+        const countA = endA - startA + 1;
+        if (countA <= 0) return;
 
-        for (let ei = 0; ei < vertCount; ei++) {
-            const entry = neigh[ei];
+        const startB = this.mesh.polys[pb * 2];
+        const endB = this.mesh.polys[pb * 2 + 1];
+        const countB = endB - startB + 1;
+        if (countB <= 0) return;
+
+        const neighA = this.mesh.neighbors[pa];
+        const neighB = this.mesh.neighbors[pb];
+        if (!neighA || !neighB) return;
+
+        // 1) 在 pa 找到通向 pb 的边（找到即用）
+        let a0, a1;
+        for (let ea = 0; ea < countA; ea++) {
+            const entry = neighA[ea];
             if (!entry) continue;
-            const count = entry[0] | 0;
-            if (count <= 0) continue;
-            let connected = false;
-            for (let k = 1; k <= count; k++) {
-                if (entry[k] === pb) {
-                    connected = true;
-                    break;
-                }
+            const n = entry[0] | 0;
+            let hit = false;
+            for (let k = 1; k <= n; k++) {
+                if (entry[k] === pb) { hit = true; break; }
             }
-            if (!connected) continue;
+            if (!hit) continue;
 
-            const vi0 = startVert + ei;
-            const vi1 = startVert + ((ei + 1) % vertCount);
-            const v0 = {
-                x: this.mesh.verts[vi0 * 3],
-                y: this.mesh.verts[vi0 * 3 + 1],
-                z: this.mesh.verts[vi0 * 3 + 2]
-            };
-            const v1 = {
-                x: this.mesh.verts[vi1 * 3],
-                y: this.mesh.verts[vi1 * 3 + 1],
-                z: this.mesh.verts[vi1 * 3 + 2]
-            };
-
-            // 统一左右（从 pa 看向 pb）
-            const ca = this.centers[pa];
-            const cb = this.centers[pb];
-
-            if (area(ca, cb, v0) < 0) {
-                return this._applyFunnelDistance(v0, v1, funnelDistance);
-            } else {
-                return this._applyFunnelDistance(v1, v0, funnelDistance);
-            }
+            const va0 = startA + ea;
+            const va1 = startA + ((ea + 1) % countA);
+            a0 = { x: this.mesh.verts[va0 * 3], y: this.mesh.verts[va0 * 3 + 1], z: this.mesh.verts[va0 * 3 + 2] };
+            a1 = { x: this.mesh.verts[va1 * 3], y: this.mesh.verts[va1 * 3 + 1], z: this.mesh.verts[va1 * 3 + 2] };
+            break;
         }
+        if (!a0 || !a1) return;
+
+        // 2) 只从 pb 里“通向 pa”的边里找共线重叠段
+        const abx = a1.x - a0.x;
+        const aby = a1.y - a0.y;
+        const abLen2 = abx * abx + aby * aby;
+        if (abLen2 < 1e-6) return;
+
+        let best = null;
+        //Instance.DebugLine({start:vec.Zfly(a0,5),end:vec.Zfly(a1,15),color:{r:255,g:255,b:0},duration:1/32});
+        
+        for (let eb = 0; eb < countB; eb++) {
+            const entryB = neighB[eb];
+            if (!entryB) continue;
+            const nb = entryB[0] | 0;
+
+            let bConnectedToA = false;
+            for (let k = 1; k <= nb; k++) {
+                if (entryB[k] === pa) { bConnectedToA = true; break; }
+            }
+            if (!bConnectedToA) continue;
+
+            const vb0 = startB + eb;
+            const vb1 = startB + ((eb + 1) % countB);
+            const b0 = { x: this.mesh.verts[vb0 * 3], y: this.mesh.verts[vb0 * 3 + 1], z: this.mesh.verts[vb0 * 3 + 2] };
+            const b1 = { x: this.mesh.verts[vb1 * 3], y: this.mesh.verts[vb1 * 3 + 1], z: this.mesh.verts[vb1 * 3 + 2] };
+            //Instance.DebugLine({start:vec.Zfly(b0,5),end:vec.Zfly(b1,15),color:{r:255,g:255,b:0},duration:1/32});
+        
+
+            const tb0 = ((b0.x - a0.x) * abx + (b0.y - a0.y) * aby) / abLen2;
+            const tb1 = ((b1.x - a0.x) * abx + (b1.y - a0.y) * aby) / abLen2;
+
+            const tMin = Math.max(0, Math.min(tb0, tb1));
+            const tMax = Math.min(1, Math.max(tb0, tb1));
+            if (tMax - tMin <= 1e-4) continue;
+
+            const p0 = {
+                x: a0.x + abx * tMin,
+                y: a0.y + aby * tMin,
+                z: a0.z + (a1.z - a0.z) * tMin
+            };
+            const p1 = {
+                x: a0.x + abx * tMax,
+                y: a0.y + aby * tMax,
+                z: a0.z + (a1.z - a0.z) * tMax
+            };
+
+            const dx = p1.x - p0.x;
+            const dy = p1.y - p0.y;
+            const len2 = dx * dx + dy * dy;
+            if (!best || len2 > best.len2) best = { p0, p1, len2 };
+        }
+        
+        // 没找到重叠段就退化
+        const v0 = best ? best.p0 : a0;
+        const v1 = best ? best.p1 : a1;
+
+        // 左右稳定排序（不要只看一个点）
+        const ca = this.centers[pa];
+        const cb = this.centers[pb];
+        const s0 = area(ca, cb, v0);
+        const s1 = area(ca, cb, v1);
+        const left = s0 >= s1 ? v0 : v1;
+        const right = s0 >= s1 ? v1 : v0;
+        //这里反了？？？？？
+        return this._applyFunnelDistance(right, left, funnelDistance);
+        
+    }
+    /**
+     * 点到直线（ab）在 XY 上距离平方
+     * @param {Vector} p
+     * @param {Vector} a
+     * @param {Vector} b
+     */
+    _pointLineDistSq2D(p, a, b) {
+        const abx = b.x - a.x;
+        const aby = b.y - a.y;
+        const apx = p.x - a.x;
+        const apy = p.y - a.y;
+        const den = abx * abx + aby * aby;
+        if (den < 1e-6) return Infinity;
+        const cross = abx * apy - aby * apx;
+        return (cross * cross) / den;
     }
     /**
     * 根据参数收缩门户宽度
@@ -4488,257 +4822,6 @@ class ContourBuilder {
  * @property {number} regionId
  * @property {number} neighborRegionId
  */
-
-/** @typedef {import("cs_script/point_script").Vector} Vector */
-
-/**
- * vec: 轻量向量工具类（无状态静态方法）。
- *
- * 约定：
- * - 不修改传入参数，所有方法返回新对象或标量
- * - `2D` 后缀表示仅计算 XY 分量（通常保留原 z 或返回 z=0）
- */
-class vec {
-    /**
-     * 三维向量加法。
-     *
-     * @param {Vector} a
-     * @param {Vector} b
-     * @returns {Vector}
-     */
-    static add(a, b) {
-        return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
-    }
-
-    /**
-     * 二维向量加法（仅累加 XY，z 保留 a.z）。
-     *
-     * @param {Vector} a
-     * @param {Vector} b
-     * @returns {Vector}
-     */
-    static add2D(a, b) {
-        return { x: a.x + b.x, y: a.y + b.y, z: a.z };
-    }
-
-    /**
-     * 三维向量减法。
-     *
-     * @param {Vector} a
-     * @param {Vector} b
-     * @returns {Vector}
-     */
-    static sub(a, b) {
-        return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
-    }
-
-    /**
-     * 三维向量按标量缩放。
-     *
-     * @param {Vector} a
-     * @param {number} s
-     * @returns {Vector}
-     */
-    static scale(a, s) {
-        return { x: a.x * s, y: a.y * s, z: a.z * s };
-    }
-
-    /**
-     * 二维向量按标量缩放（仅缩放 XY，z 保留 a.z）。
-     *
-     * @param {Vector} a
-     * @param {number} s
-     * @returns {Vector}
-     */
-    static scale2D(a, s) {
-        return {
-            x: a.x * s,
-            y: a.y * s,
-            z: a.z
-        };
-    }
-
-    /**
-     * 构造一个向量对象。
-     *
-     * @param {number} [x]
-     * @param {number} [y]
-     * @param {number} [z]
-     * @returns {Vector}
-     */
-    static get(x = 0, y = 0, z = 0) {
-        return { x, y, z };
-    }
-
-    /**
-     * 克隆向量。
-     *
-     * @param {Vector} a
-     * @returns {Vector}
-     */
-    static clone(a) {
-        return { x: a.x, y: a.y, z: a.z };
-    }
-
-    /**
-     * 计算三维欧氏距离。
-     * b 缺省时按原点处理。
-     *
-     * @param {Vector} a
-     * @param {Vector} [b]
-     * @returns {number}
-     */
-    static length(a, b = { x: 0, y: 0, z: 0 }) {
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const dz = a.z - b.z;
-        return Math.sqrt(dx * dx + dy * dy + dz * dz);
-    }
-    /**
-     * 计算三维欧氏距离平方。
-     * b 缺省时按原点处理。
-     *
-     * @param {Vector} a
-     * @param {Vector} [b]
-     * @returns {number}
-     */
-    static lengthsq(a, b = { x: 0, y: 0, z: 0 }) {
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const dz = a.z - b.z;
-        return dx * dx + dy * dy + dz * dz;
-    }
-    /**
-     * 计算二维欧氏距离（仅 XY）。
-     * b 缺省时按原点处理。
-     *
-     * @param {Vector} a
-     * @param {Vector} [b]
-     * @returns {number}
-     */
-    static length2D(a, b = { x: 0, y: 0, z: 0 }) {
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        return Math.sqrt(dx * dx + dy * dy);
-    }
-    /**
-     * 计算二维欧氏距离平方（仅 XY）。
-     * b 缺省时按原点处理。
-     *
-     * @param {Vector} a
-     * @param {Vector} [b]
-     * @returns {number}
-     */
-    static length2Dsq(a, b = { x: 0, y: 0, z: 0 }) {
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        return dx * dx + dy * dy;
-    }
-    /**
-     * 返回点在 Z 轴上偏移后的新坐标。
-     *
-     * @param {Vector} pos
-     * @param {number} height
-     * @returns {Vector}
-     */
-    static Zfly(pos, height) {
-        return { x: pos.x, y: pos.y, z: pos.z + height };
-    }
-
-    /**
-     * 输出向量坐标到游戏消息。
-     *
-     * @param {Vector} pos
-     */
-    static msg(pos) {
-        Instance.Msg(`{${pos.x} ${pos.y} ${pos.z}}`);
-    }
-
-    /**
-     * 三维点积。
-     *
-     * @param {Vector} a
-     * @param {Vector} b
-     * @returns {number}
-     */
-    static dot(a, b) {
-        return a.x * b.x + a.y * b.y + a.z * b.z;
-    }
-
-    /**
-     * 二维点积（仅 XY）。
-     *
-     * @param {Vector} a
-     * @param {Vector} b
-     * @returns {number}
-     */
-    static dot2D(a, b) {
-        return a.x * b.x + a.y * b.y;
-    }
-
-    /**
-     * 三维叉积。
-     *
-     * @param {Vector} a
-     * @param {Vector} b
-     * @returns {Vector}
-     */
-    static cross(a, b) {
-        return {
-            x: a.y * b.z - a.z * b.y,
-            y: a.z * b.x - a.x * b.z,
-            z: a.x * b.y - a.y * b.x
-        };
-    }
-
-    /**
-     * 三维单位化。
-     * 当长度过小（<1e-6）时返回零向量，避免除零。
-     *
-     * @param {Vector} a
-     * @returns {Vector}
-     */
-    static normalize(a) {
-        const len = this.length(a);
-        if (len < 1e-6) {
-            return { x: 0, y: 0, z: 0 };
-        }
-        return this.scale(a, 1 / len);
-    }
-
-    /**
-     * 二维单位化（仅 XY，返回 z=0）。
-     * 当长度过小（<1e-6）时返回零向量。
-     *
-     * @param {Vector} a
-     * @returns {Vector}
-     */
-    static normalize2D(a) {
-        const len = this.length2D(a);
-        if (len < 1e-6) {
-            return { x: 0, y: 0, z: 0 };
-        }
-        return {
-            x: a.x / len,
-            y: a.y / len,
-            z: 0
-        };
-    }
-
-    /**
-     * 判断是否为近似零向量。
-     *
-     * @param {Vector} a
-     * @returns {boolean}
-     */
-    static isZero(a) {
-        return (
-            Math.abs(a.x) < 1e-6 &&
-            Math.abs(a.y) < 1e-6 &&
-            Math.abs(a.z) < 1e-6
-        );
-    }
-}
 
 /** @typedef {import("cs_script/point_script").Vector} Vector */
 /** @typedef {import("./path_contourbuilder").Contour} Contour */
@@ -9762,7 +9845,6 @@ class NVplugin {
     }
     tick()
     {
-        let start=new Date();
         switch(this.up)
         {
             case 0:
@@ -9799,18 +9881,10 @@ class NVplugin {
             case 4:
                 //3ms
                 Tool.buildSpatialIndex(this.tileManager.mesh);
-                this.up++;
-                break;
-            case 5:
-                //2ms
                 this.tileManager.supprlink= this.tileManager.buildSupperLinksForMesh(this.tileManager.mesh);
                 let merged = this.tileManager.copyLinks(this.tileManager.baseLinks, this.tileManager.Extlink);
                 merged = this.tileManager.copyLinks(merged, this.tileManager.supprlink);
                 this.tileManager.links = merged;
-                this.up++;
-                break;
-            case 6:
-                //7ms
                 this.tileManager.pruneUnreachablePolys();
                 this.tileManager.updatemesh();
                 this.nav._refreshRuntime();
@@ -9821,8 +9895,6 @@ class NVplugin {
                 this.up=0;
                 break;
         }
-        let end=new Date();
-        if(this.up>0)Instance.Msg(`${this.up} ${end.getTime() - start.getTime()} ms`);
     }
     /**
      * @param {string} name
@@ -10126,7 +10198,6 @@ class NavMesh {
     debug(duration = 60) {
         {
             try{
-                Instance.Msg("debug");
                 Instance.Msg(`多边形总数: ${this.mesh.polyslength-1}  跳点总数: ${this.links.length-1}`);
                 this.debugTools.debugDrawMeshPolys(duration);
                 this.debugTools.debugDrawMeshConnectivity(duration);
@@ -10150,12 +10221,8 @@ class NavMesh {
         //this.debugTools.debugDrawPolyPath(polyPath.path,1);
         //if (!polyPath || polyPath.path.length === 0) return [];
         const funnelPath = this.funnel.build(polyPath.path, polyPath.start, polyPath.end);
-        //this.debugTools.debugDrawfunnelPath(funnelPath,1);
-        {
-            const ans=this.heightfixer.fixHeight(funnelPath,polyPath.path);
-            //this.debugTools.debugDrawPath(ans,1);
-            return ans;
-        }
+        this.debugTools.debugDrawfunnelPath(funnelPath,1/32);
+        return funnelPath;
         //if (!ans || ans.length === 0) return [];
         //多边形总数：649跳点数：82
         //100次A*           30ms
@@ -10204,6 +10271,7 @@ function init()
 let start={x:3457,y:-984,z:-352};
 let end={x:-2960,y:-625,z:-416};
 let pd=false;
+let ttt=0;
 Instance.SetThink(() => {
     if(pd==true)
     {
@@ -10222,22 +10290,21 @@ Instance.SetThink(() => {
         //        }
         //    }
         //})
-        //pathfinder.tick();
-        //ttt++;
-        //if(ttt%64==0)pathfinder.debug(1);
-        for(let i=0;i<100;i++)pathfinder.findPath(start,end);
+        pathfinder.tick();
+        ttt++;
+        if(ttt%32==0)pathfinder.debug(1);
+        for(let i=0;i<1;i++)pathfinder.findPath(start,end);
     }
-    Instance.SetNextThink(Instance.GetGameTime()+1/1);
+    Instance.SetNextThink(Instance.GetGameTime()+1/32);
 });
-Instance.SetNextThink(Instance.GetGameTime()+1/1);
+Instance.SetNextThink(Instance.GetGameTime()+1/32);
 Instance.OnBulletImpact((event)=>{
-    let start = new Date();
-    pathfinder.update(event.position);
-    let end = new Date();
-    Instance.Msg(`导航更新完成,耗时${end.getTime()-start.getTime()}ms`);
+    //let start = new Date();
+    ////pathfinder.update(event.position);
+    //let end = new Date();
+    //Instance.Msg(`导航更新完成,耗时${end.getTime()-start.getTime()}ms`);
     //pathfinder.debug(30);
-    //if(sss)end=event.position;
-    //else start=event.position;
+    end=event.position;
     //sss=!sss;
     //pathfinder.findPath(start,end);
     //pathfinder.findPath(start,end);
@@ -10254,7 +10321,7 @@ Instance.OnPlayerChat((event) => {
         //多边形总数: 651  跳点总数: 91
         //多边形总数: 635  跳点总数: 78
         Instance.Msg("开始调试");
-        for(let i=0;i<1;i++)pathfinder.findPath(start,end);
+        //for(let i=0;i<1;i++)pathfinder.findPath(start,end);
         //pathfinder.debug(60);
         //pathfinder.debugTools.debug(60);
         //pathfinder.debugTools.testinit();

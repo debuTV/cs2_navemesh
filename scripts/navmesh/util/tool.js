@@ -216,8 +216,9 @@ export class Tool {
      * @param {Vector} p
      * @param {NavMeshMesh} mesh
      * @param {FunnelHeightFixer}[heightfixer]
+     * @param {boolean} [findall=false] 
      */
-    static findNearestPoly(p, mesh, heightfixer) {
+    static findNearestPoly(p, mesh, heightfixer,findall=false) {
         //Instance.DebugSphere({center:{x:p.x,y:p.y,z:p.z},radius:2,duration:30,color:{r:255,g:255,b:255}});
         if (gridW <= 0 || gridH <= 0 || cellStart.length === 0) {
             return { pos: p, poly: -1 };
@@ -267,7 +268,7 @@ export class Tool {
                     }
                 }
             }
-            if(inpoly)break;
+            if(inpoly&& !findall)break;
         }
         return { pos: bestPos, poly: bestPoly };
     }

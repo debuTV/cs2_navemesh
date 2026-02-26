@@ -1,5 +1,7 @@
-﻿import { area, FUNNEL_DISTANCE, PathState } from "./path_const";
+﻿import { Instance } from "cs_script/point_script";
+import { area, FUNNEL_DISTANCE, PathState } from "./path_const";
 import { Tool } from "./util/tool";
+import { vec } from "./util/vector";
 /** @typedef {import("cs_script/point_script").Vector} Vector */
 /** @typedef {import("./path_manager").NavMeshMesh} NavMeshMesh */
 /** @typedef {import("./path_manager").NavMeshLink} NavMeshLink */
@@ -146,55 +148,127 @@ export class FunnelPath {
 
     /**
     * 寻找两个多边形的公共边
+    * 再把这条边投影到 pb 的各条边上，取真正共线且重叠的片段
      * @param {number} pa
     * @param {number} pb
      * @param {number} funnelDistance
      */
     findPortal(pa, pb, funnelDistance) {
-        const startVert = this.mesh.polys[pa * 2];
-        const endVert = this.mesh.polys[pa * 2 + 1];
-        const vertCount = endVert - startVert + 1;
-        if (vertCount <= 0) return;
-        const neigh = this.mesh.neighbors[pa];
-        if (!neigh) return;
+        const startA = this.mesh.polys[pa * 2];
+        const endA = this.mesh.polys[pa * 2 + 1];
+        const countA = endA - startA + 1;
+        if (countA <= 0) return;
 
-        for (let ei = 0; ei < vertCount; ei++) {
-            const entry = neigh[ei];
+        const startB = this.mesh.polys[pb * 2];
+        const endB = this.mesh.polys[pb * 2 + 1];
+        const countB = endB - startB + 1;
+        if (countB <= 0) return;
+
+        const neighA = this.mesh.neighbors[pa];
+        const neighB = this.mesh.neighbors[pb];
+        if (!neighA || !neighB) return;
+
+        // 1) 在 pa 找到通向 pb 的边（找到即用）
+        let a0, a1;
+        for (let ea = 0; ea < countA; ea++) {
+            const entry = neighA[ea];
             if (!entry) continue;
-            const count = entry[0] | 0;
-            if (count <= 0) continue;
-            let connected = false;
-            for (let k = 1; k <= count; k++) {
-                if (entry[k] === pb) {
-                    connected = true;
-                    break;
-                }
+            const n = entry[0] | 0;
+            let hit = false;
+            for (let k = 1; k <= n; k++) {
+                if (entry[k] === pb) { hit = true; break; }
             }
-            if (!connected) continue;
+            if (!hit) continue;
 
-            const vi0 = startVert + ei;
-            const vi1 = startVert + ((ei + 1) % vertCount);
-            const v0 = {
-                x: this.mesh.verts[vi0 * 3],
-                y: this.mesh.verts[vi0 * 3 + 1],
-                z: this.mesh.verts[vi0 * 3 + 2]
-            };
-            const v1 = {
-                x: this.mesh.verts[vi1 * 3],
-                y: this.mesh.verts[vi1 * 3 + 1],
-                z: this.mesh.verts[vi1 * 3 + 2]
-            };
-
-            // 统一左右（从 pa 看向 pb）
-            const ca = this.centers[pa];
-            const cb = this.centers[pb];
-
-            if (area(ca, cb, v0) < 0) {
-                return this._applyFunnelDistance(v0, v1, funnelDistance);
-            } else {
-                return this._applyFunnelDistance(v1, v0, funnelDistance);
-            }
+            const va0 = startA + ea;
+            const va1 = startA + ((ea + 1) % countA);
+            a0 = { x: this.mesh.verts[va0 * 3], y: this.mesh.verts[va0 * 3 + 1], z: this.mesh.verts[va0 * 3 + 2] };
+            a1 = { x: this.mesh.verts[va1 * 3], y: this.mesh.verts[va1 * 3 + 1], z: this.mesh.verts[va1 * 3 + 2] };
+            break;
         }
+        if (!a0 || !a1) return;
+
+        // 2) 只从 pb 里“通向 pa”的边里找共线重叠段
+        const abx = a1.x - a0.x;
+        const aby = a1.y - a0.y;
+        const abLen2 = abx * abx + aby * aby;
+        if (abLen2 < 1e-6) return;
+
+        let best = null;
+        //Instance.DebugLine({start:vec.Zfly(a0,5),end:vec.Zfly(a1,15),color:{r:255,g:255,b:0},duration:1/32});
+        
+        for (let eb = 0; eb < countB; eb++) {
+            const entryB = neighB[eb];
+            if (!entryB) continue;
+            const nb = entryB[0] | 0;
+
+            let bConnectedToA = false;
+            for (let k = 1; k <= nb; k++) {
+                if (entryB[k] === pa) { bConnectedToA = true; break; }
+            }
+            if (!bConnectedToA) continue;
+
+            const vb0 = startB + eb;
+            const vb1 = startB + ((eb + 1) % countB);
+            const b0 = { x: this.mesh.verts[vb0 * 3], y: this.mesh.verts[vb0 * 3 + 1], z: this.mesh.verts[vb0 * 3 + 2] };
+            const b1 = { x: this.mesh.verts[vb1 * 3], y: this.mesh.verts[vb1 * 3 + 1], z: this.mesh.verts[vb1 * 3 + 2] };
+            //Instance.DebugLine({start:vec.Zfly(b0,5),end:vec.Zfly(b1,15),color:{r:255,g:255,b:0},duration:1/32});
+        
+
+            const tb0 = ((b0.x - a0.x) * abx + (b0.y - a0.y) * aby) / abLen2;
+            const tb1 = ((b1.x - a0.x) * abx + (b1.y - a0.y) * aby) / abLen2;
+
+            const tMin = Math.max(0, Math.min(tb0, tb1));
+            const tMax = Math.min(1, Math.max(tb0, tb1));
+            if (tMax - tMin <= 1e-4) continue;
+
+            const p0 = {
+                x: a0.x + abx * tMin,
+                y: a0.y + aby * tMin,
+                z: a0.z + (a1.z - a0.z) * tMin
+            };
+            const p1 = {
+                x: a0.x + abx * tMax,
+                y: a0.y + aby * tMax,
+                z: a0.z + (a1.z - a0.z) * tMax
+            };
+
+            const dx = p1.x - p0.x;
+            const dy = p1.y - p0.y;
+            const len2 = dx * dx + dy * dy;
+            if (!best || len2 > best.len2) best = { p0, p1, len2 };
+        }
+        
+        // 没找到重叠段就退化
+        const v0 = best ? best.p0 : a0;
+        const v1 = best ? best.p1 : a1;
+
+        // 左右稳定排序（不要只看一个点）
+        const ca = this.centers[pa];
+        const cb = this.centers[pb];
+        const s0 = area(ca, cb, v0);
+        const s1 = area(ca, cb, v1);
+        const left = s0 >= s1 ? v0 : v1;
+        const right = s0 >= s1 ? v1 : v0;
+        //这里反了？？？？？
+        return this._applyFunnelDistance(right, left, funnelDistance);
+        
+    }
+    /**
+     * 点到直线（ab）在 XY 上距离平方
+     * @param {Vector} p
+     * @param {Vector} a
+     * @param {Vector} b
+     */
+    _pointLineDistSq2D(p, a, b) {
+        const abx = b.x - a.x;
+        const aby = b.y - a.y;
+        const apx = p.x - a.x;
+        const apy = p.y - a.y;
+        const den = abx * abx + aby * aby;
+        if (den < 1e-6) return Infinity;
+        const cross = abx * apy - aby * apx;
+        return (cross * cross) / den;
     }
     /**
     * 根据参数收缩门户宽度

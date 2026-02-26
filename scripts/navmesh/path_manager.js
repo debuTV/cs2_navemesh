@@ -294,7 +294,6 @@ export class NavMesh {
         }
         if (LOAD_DEBUG) {
             try{
-                Instance.Msg("debug");
                 Instance.Msg(`多边形总数: ${this.mesh.polyslength-1}  跳点总数: ${this.links.length-1}`);
                 this.debugTools.debugDrawMeshPolys(duration);
                 this.debugTools.debugDrawMeshConnectivity(duration);
@@ -327,7 +326,7 @@ export class NavMesh {
         //this.debugTools.debugDrawPolyPath(polyPath.path,1);
         //if (!polyPath || polyPath.path.length === 0) return [];
         const funnelPath = this.funnel.build(polyPath.path, polyPath.start, polyPath.end);
-        //this.debugTools.debugDrawfunnelPath(funnelPath,1);
+        this.debugTools.debugDrawfunnelPath(funnelPath,1/32);
         if(ADJUST_HEIGHT)
         {
             const ans=this.heightfixer.fixHeight(funnelPath,polyPath.path);
