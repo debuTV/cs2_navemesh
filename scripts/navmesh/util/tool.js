@@ -5,7 +5,16 @@ import { FunnelHeightFixer } from "../path_funnelheightfixer";
 /** @typedef {import("../path_manager").NavMeshMesh} NavMeshMesh */
 // 查询所在多边形优化
 let spatialCellSize = 128;
-let spatialGrid = new Map();
+
+// 压缩网格（CSR）
+let gridMinX = 0;
+let gridMinY = 0;
+let gridW = 0;
+let gridH = 0;
+
+// 长度 = gridW * gridH
+let cellStart = new Uint32Array(0); // 建议长度 N+1，便于取区间
+let cellItems = new Int32Array(0);  // 扁平候选 poly 列表
 /**
  * Tool: NavMesh 与路径模块共享的纯工具函数集合（无状态静态方法）。
  * - 仅放“可复用且与业务对象解耦”的逻辑
@@ -111,32 +120,93 @@ export class Tool {
         return includeEndpoints ? dot <= epsilon : dot < -epsilon;
     }
     /**
-     * @param {{verts: {x: number;y: number;z: number;}[];polys: number[][];neighbors: number[][][];}} mesh
+     * @param {NavMeshMesh} mesh
      */
     static buildSpatialIndex(mesh) {
-        spatialGrid.clear();
-        for (let i = 0; i < mesh.polys.length; i++) {
-            const poly = mesh.polys[i];
+        const polyCount = mesh.polyslength;
+        if (polyCount <= 0) {
+            gridW = gridH = 0;
+            cellStart = new Uint32Array(0);
+            cellItems = new Int32Array(0);
+            return;
+        }
+        // 假设mesh.polys为TypedArray，每个poly用起止索引
+        // mesh.polys: [start0, end0, start1, end1, ...]，verts为flat xyz数组
+        const c0x = new Int32Array(polyCount);
+        const c1x = new Int32Array(polyCount);
+        const c0y = new Int32Array(polyCount);
+        const c1y = new Int32Array(polyCount);
+
+        let minCellX = Infinity;
+        let minCellY = Infinity;
+        let maxCellX = -Infinity;
+        let maxCellY = -Infinity;
+        // pass1: 每个 poly 的 cell AABB + 全局边界
+        for (let i = 0; i < polyCount; i++) {
+            const start = mesh.polys[i << 1];
+            const end = mesh.polys[(i << 1) + 1];
 
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const vi of poly) {
-                const v = mesh.verts[vi];
-                if (v.x < minX) minX = v.x;
-                if (v.y < minY) minY = v.y;
-                if (v.x > maxX) maxX = v.x;
-                if (v.y > maxY) maxY = v.y;
+            for (let vi = start; vi <= end; vi++) {
+                const v3 = vi * 3;
+                const x = mesh.verts[v3];
+                const y = mesh.verts[v3 + 1];
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
             }
 
             const x0 = Math.floor(minX / spatialCellSize);
-            const x1 = Math.ceil(maxX / spatialCellSize);
+            const x1 = Math.floor(maxX / spatialCellSize);
             const y0 = Math.floor(minY / spatialCellSize);
-            const y1 = Math.ceil(maxY / spatialCellSize);
+            const y1 = Math.floor(maxY / spatialCellSize);
 
-            for (let x = x0; x <= x1; x++) {
-                for (let y = y0; y <= y1; y++) {
-                    const key = `${x}_${y}`;
-                    if (!spatialGrid.has(key)) spatialGrid.set(key, []);
-                    spatialGrid.get(key).push(i);
+            c0x[i] = x0; c1x[i] = x1;
+            c0y[i] = y0; c1y[i] = y1;
+
+            if (x0 < minCellX) minCellX = x0;
+            if (y0 < minCellY) minCellY = y0;
+            if (x1 > maxCellX) maxCellX = x1;
+            if (y1 > maxCellY) maxCellY = y1;
+        }
+
+        gridMinX = minCellX;
+        gridMinY = minCellY;
+        gridW = (maxCellX - minCellX + 1) | 0;
+        gridH = (maxCellY - minCellY + 1) | 0;
+
+        const N = gridW * gridH;
+        const cellCount = new Uint32Array(N);
+
+        // pass2: 统计每个 cell 的候选数量
+        for (let i = 0; i < polyCount; i++) {
+            for (let y = c0y[i]; y <= c1y[i]; y++) {
+                const row = (y - gridMinY) * gridW;
+                for (let x = c0x[i]; x <= c1x[i]; x++) {
+                    const idx = row + (x - gridMinX);
+                    cellCount[idx]++;
+                }
+            }
+        }
+
+        // prefix sum -> cellStart (N+1)
+        cellStart = new Uint32Array(N + 1);
+        for (let i = 0; i < N; i++) {
+            cellStart[i + 1] = cellStart[i] + cellCount[i];
+        }
+
+        cellItems = new Int32Array(cellStart[N]);
+        const writePtr = new Uint32Array(cellStart.subarray(0, N));
+
+        // pass3: 写入 poly 索引
+        for (let i = 0; i < polyCount; i++) {
+            for (let y = c0y[i]; y <= c1y[i]; y++) {
+                const row = (y - gridMinY) * gridW;
+                for (let x = c0x[i]; x <= c1x[i]; x++) {
+                    const idx = row + (x - gridMinX);
+                    const w = writePtr[idx]++;
+                    cellItems[w] = i;
                 }
             }
         }
@@ -147,47 +217,260 @@ export class Tool {
      * @param {NavMeshMesh} mesh
      * @param {FunnelHeightFixer}[heightfixer]
      */
-    static findNearestPoly(p,mesh,heightfixer) {
+    static findNearestPoly(p, mesh, heightfixer) {
         //Instance.DebugSphere({center:{x:p.x,y:p.y,z:p.z},radius:2,duration:30,color:{r:255,g:255,b:255}});
-        const extents = MAX_JUMP_HEIGHT * MESH_CELL_SIZE_Z;//高度误差
+        if (gridW <= 0 || gridH <= 0 || cellStart.length === 0) {
+            return { pos: p, poly: -1 };
+        }
+        const extents = MAX_JUMP_HEIGHT * MESH_CELL_SIZE_Z;
         let bestPoly = -1;
         let bestDist = Infinity;
         let bestPos = p;
-        const x = Math.floor(p.x / spatialCellSize);
-        const y = Math.floor(p.y / spatialCellSize);
-        for (let i = -1; i <= 1; i++) {
-            for (let j = -1; j <= 1; j++) {
-                const key = `${x + i}_${y + j}`;
-                //const key = `${x}_${y}`;
-                const candidates = spatialGrid.get(key);
-                if (!candidates) continue;
-                //if (!candidates) return{pos:bestPos,poly:bestPoly};
-                for (const polyIdx of candidates) {
-                    const poly = mesh.polys[polyIdx];
-                    const cp = closestPointOnPoly(p, mesh.verts, poly);
-                    if (!cp) continue;
-
-                    if (cp.in == true) {
-                        const h = heightfixer?._getHeightOnDetail(polyIdx, p);
-                        cp.z = h ?? cp.z;
-                    }
-                    //Instance.DebugSphere({center:{x:cp.x,y:cp.y,z:cp.z},radius:2,duration:30,color:{r:255,g:255,b:255}});
-                    const dx = cp.x - p.x;
-                    const dy = cp.y - p.y;
-                    const dz = cp.z - p.z;
-                    const d = dx * dx + dy * dy + dz * dz;
-
-                    if (d < bestDist) {
-                        bestDist = d;
-                        bestPoly = polyIdx;
-                        bestPos = cp;
+        const cx = Math.floor(p.x / spatialCellSize);
+        const cy = Math.floor(p.y / spatialCellSize);
+        for(let ring=0;ring<=1;ring++)
+        {
+            let inpoly=false;
+            for (let i = -ring; i <= ring; i++)
+            {
+                const x = cx + i;
+                if (x < gridMinX || x >= gridMinX + gridW) continue;
+                for (let j = -ring; j <= ring; j++) {
+                    if(i+j<ring)continue;
+                    const y = cy + j;
+                    if (y < gridMinY || y >= gridMinY + gridH) continue;
+                    const idx = (y - gridMinY) * gridW + (x - gridMinX);
+                    const begin = cellStart[idx];
+                    const end = cellStart[idx + 1];
+                    for (let it = begin; it < end; it++) {
+                        const polyIdx = cellItems[it];
+                        // TypedArray结构：每个poly用起止索引
+                        const start = mesh.polys[polyIdx * 2];
+                        const end = mesh.polys[polyIdx * 2 + 1];
+                        // 传递顶点索引区间给closestPointOnPoly
+                        const cp = closestPointOnPoly(p, mesh.verts, start, end);
+                        if (!cp) continue;
+                        if (cp.in === true) {
+                            const h = heightfixer?._getHeightOnDetail(polyIdx, p);
+                            cp.z = h ?? cp.z;
+                            inpoly=true;
+                        }
+                        const dx = cp.x - p.x;
+                        const dy = cp.y - p.y;
+                        const dz = cp.z - p.z;
+                        const d = dx * dx + dy * dy + dz * dz;
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestPoly = polyIdx;
+                            bestPos = cp;
+                        }
                     }
                 }
             }
+            if(inpoly)break;
         }
-        //Instance.DebugSphere({center:{x:bestPos.x,y:bestPos.y,z:bestPos.z},radius:2,duration:30,color:{r:255,g:255,b:255}});
-                    
         return { pos: bestPos, poly: bestPoly };
+    }
+    /**
+     * 导出时只保留已使用长度，避免打印大量尾部 0。
+     * @param {import("../path_tilemanager").TileData} td
+     */
+    static _compactTileData(td) {
+        return {
+            tileId: td.tileId,
+            tx: td.tx,
+            ty: td.ty,
+            mesh: this._compactMesh(td.mesh),
+            detail: this._compactDetail(td.detail, td.mesh?.polyslength ?? 0),
+            links: this._compactLinks(td.links)
+        };
+    }
+
+    /**
+     * @param {import("../path_manager").NavMeshMesh} mesh
+     */
+    static _compactMesh(mesh) {
+        const polyslength = mesh.polyslength;
+        const vertslength = mesh.vertslength;
+        const polys = this._typedSlice(mesh.polys, polyslength * 2);
+        const verts = this._typedSlice(mesh.verts, vertslength * 3);
+        const regions = this._typedSlice(mesh.regions, polyslength);
+        /** @type {number[][][]} */
+        const neighbors = new Array(polyslength);
+        for (let p = 0; p < polyslength; p++) {
+            const start = polys[p * 2];
+            const end = polys[p * 2 + 1];
+            const edgeCount = Math.max(0, end - start + 1);
+            const edgeLists = new Array(edgeCount);
+            const srcEdges = mesh.neighbors[p];
+            for (let e = 0; e < edgeCount; e++) {
+                const list = srcEdges[e];
+                const count = list[0];
+                const used = Math.max(1, count + 1);
+                edgeLists[e] = this._typedSlice(list, used);
+            }
+            neighbors[p] = edgeLists;
+        }
+        return { verts, vertslength, polys, polyslength, regions, neighbors };
+    }
+
+    /**
+     * @param {import("../path_manager").NavMeshDetail} detail
+     * @param {number} polyCount
+     */
+    static _compactDetail(detail, polyCount) {
+        const vertslength = detail.vertslength;
+        const trislength = detail.trislength;
+        return {
+            verts: this._typedSlice(detail.verts, vertslength * 3),
+            vertslength,
+            tris: this._typedSlice(detail.tris, trislength * 3),
+            trislength,
+            triTopoly: this._typedSlice(detail.triTopoly, trislength),
+            baseVert: this._typedSlice(detail.baseVert, polyCount),
+            vertsCount: this._typedSlice(detail.vertsCount, polyCount),
+            baseTri: this._typedSlice(detail.baseTri, polyCount),
+            triCount: this._typedSlice(detail.triCount, polyCount)
+        };
+    }
+
+    /**
+     * @param {import("../path_manager").NavMeshLink} links
+     */
+    static _compactLinks(links) {
+        const len = links.length;
+        return {
+            poly: this._typedSlice(links.poly, len * 2),
+            cost: this._typedSlice(links.cost, len),
+            type: this._typedSlice(links.type, len),
+            pos: this._typedSlice(links.pos, len * 6),
+            length: len
+        };
+    }
+
+    /**
+     * TypedArray / Array 按有效长度切片并转普通数组，便于 JSON 紧凑输出。
+     * @param {number} usedLen
+     * @param {Uint16Array<ArrayBufferLike> | Float32Array<ArrayBufferLike> | Int32Array<ArrayBufferLike> | Int16Array<ArrayBufferLike> | Uint8Array<ArrayBufferLike>} arr
+     */
+    static _typedSlice(arr, usedLen) {
+        const n = Math.max(0, usedLen | 0);
+        if (!arr) return [];
+        return Array.from(arr.subarray(0, n));
+    }
+
+    /**
+     * 把导出的普通对象 mesh 恢复为 TypedArray 结构。
+     * @param {{
+     *  verts: number[],
+     *  vertslength: number,
+     *  polys: number[],
+     *  polyslength: number,
+     *  regions?: number[],
+     *  neighbors?: number[][][]
+     * }} mesh
+     * @returns {import("../path_manager").NavMeshMesh}
+     */
+    static toTypedMesh(mesh) {
+        const polyslength = mesh?.polyslength ?? ((mesh?.polys?.length ?? 0) >> 1);
+        const vertslength = mesh?.vertslength ?? Math.floor((mesh?.verts?.length ?? 0) / 3);
+
+        const typedPolys = new Int32Array(mesh?.polys ?? []);
+        const typedVerts = new Float32Array(mesh?.verts ?? []);
+        const typedRegions = new Int16Array(
+            (mesh?.regions && mesh.regions.length > 0) ? mesh.regions : new Array(polyslength).fill(0)
+        );
+
+        /** @type {Int16Array[][]} */
+        const typedNeighbors = new Array(polyslength);
+        for (let p = 0; p < polyslength; p++) {
+            const start = typedPolys[p << 1];
+            const end = typedPolys[(p << 1) + 1];
+            const edgeCount = Math.max(0, end - start + 1);
+            const srcEdges = mesh?.neighbors?.[p] ?? [];
+            const edgeLists = new Array(edgeCount);
+
+            for (let e = 0; e < edgeCount; e++) {
+                const srcList = srcEdges[e] ?? [0];
+                const count = Math.max(0, srcList[0] | 0);
+                const len = Math.max(1, count + 1);
+                const out = new Int16Array(len);
+                out[0] = count;
+                for (let i = 1; i < len && i < srcList.length; i++) {
+                    out[i] = srcList[i] | 0;
+                }
+                edgeLists[e] = out;
+            }
+
+            typedNeighbors[p] = edgeLists;
+        }
+
+        return {
+            verts: typedVerts,
+            vertslength,
+            polys: typedPolys,
+            polyslength,
+            regions: typedRegions,
+            neighbors: typedNeighbors
+        };
+    }
+
+    /**
+     * 把导出的普通对象 detail 恢复为 TypedArray 结构。
+     * @param {{
+     *  verts: number[],
+     *  vertslength: number,
+     *  tris: number[],
+     *  trislength: number,
+     *  triTopoly: number[],
+     *  baseVert: number[],
+     *  vertsCount: number[],
+     *  baseTri: number[],
+     *  triCount: number[]
+     * }} detail
+     * @returns {import("../path_manager").NavMeshDetail}
+     */
+    static toTypedDetail(detail) {
+        const vertslength = detail?.vertslength ?? Math.floor((detail?.verts?.length ?? 0) / 3);
+        const trislength = detail?.trislength ?? Math.floor((detail?.tris?.length ?? 0) / 3);
+        return {
+            verts: new Float32Array(detail?.verts ?? []),
+            vertslength,
+            tris: new Uint16Array(detail?.tris ?? []),
+            trislength,
+            triTopoly: new Uint16Array(detail?.triTopoly ?? []),
+            baseVert: new Uint16Array(detail?.baseVert ?? []),
+            vertsCount: new Uint16Array(detail?.vertsCount ?? []),
+            baseTri: new Uint16Array(detail?.baseTri ?? []),
+            triCount: new Uint16Array(detail?.triCount ?? [])
+        };
+    }
+
+    /**
+     * 把导出的普通对象 links 恢复为 TypedArray 结构。
+     * @param {{
+     *  poly: number[],
+     *  cost: number[],
+     *  type: number[],
+     *  pos: number[],
+     *  length: number
+     * }} links
+     * @returns {import("../path_manager").NavMeshLink}
+     */
+    static toTypedLinks(links) {
+        const length = links?.length ?? Math.min(
+            Math.floor((links?.poly?.length ?? 0) / 2),
+            links?.cost?.length ?? 0,
+            links?.type?.length ?? 0,
+            Math.floor((links?.pos?.length ?? 0) / 6)
+        );
+        return {
+            poly: new Uint16Array(links?.poly ?? []),
+            cost: new Float32Array(links?.cost ?? []),
+            type: new Uint8Array(links?.type ?? []),
+            pos: new Float32Array(links?.pos ?? []),
+            length
+        };
     }
 }
 

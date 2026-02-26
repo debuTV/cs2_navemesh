@@ -1,10 +1,7 @@
 ﻿import { Instance } from "cs_script/point_script";
-import {area,distPtSegSq,isConvex,POLY_MAX_VERTS_PER_POLY,pointInTri,POLY_MERGE_LONGEST_EDGE_FIRST,POLY_BIG_TRI,origin,MESH_CELL_SIZE_XY,MESH_CELL_SIZE_Z} from "./path_const";
+import {area,distPtSegSq,isConvex,POLY_MAX_VERTS_PER_POLY,pointInTri,POLY_MERGE_LONGEST_EDGE_FIRST,POLY_BIG_TRI,origin,MESH_CELL_SIZE_XY,MESH_CELL_SIZE_Z, MAX_POLYS, MAX_VERTS} from "./path_const";
 import { vec } from "./util/vector";
 /** @typedef {import("cs_script/point_script").Vector} Vector */
-/** @typedef {import("./path_manager").NavMeshMesh} NavMeshMesh */
-/** @typedef {import("./path_manager").NavMeshLink} NavMeshLink */
-/** @typedef {import("./path_manager").NavMeshDetail} NavMeshDetail */
 /** @typedef {import("./path_contourbuilder").Contour} Contour */
 export class PolyMeshBuilder {
     /**
@@ -16,16 +13,28 @@ export class PolyMeshBuilder {
         /** @type {Contour[][]} */
         this.contours = contours;
 
-        /** @type {Vector[]} */
-        this.verts = [];
-        /** @type {Map<string, number>} */
-        this.vertIndexMap = new Map();
-        /** @type {number[][]} */
-        this.polys = [];
-        /** @type {number[]} */
-        this.regions = [];
-        /** @type {number[][][]} */
-        this.neighbors = [];
+        /** @type {Float32Array} 顶点坐标数组，顺序为[x0,y0,z0,x1,y1,z1,...] */
+        this.verts = new Float32Array(MAX_VERTS * 3); // 0:顶点0的x，1:顶点0的y，2:顶点0的z，3:顶点1的x，4:顶点1的y，5:顶点1的z，以此类推
+        /** @type {number} 当前已用顶点数 */
+        this.vertslength = 0;
+        /** @type {Int32Array} 多边形顶点索引区间数组，顺序为[start0,end0,start1,end1,...] */
+        this.polys = new Int32Array(MAX_POLYS * 2); // 0:多边形0的第一个顶点索引，1:多边形0的终点索引，2:多边形1的第一个顶点索引，3:多边形1的终点索引，以此类推
+        /** @type {number} 当前已用多边形数 */
+        this.polyslength = 0;
+        /** @type {Int16Array} 多边形所属区域id数组 */
+        this.regions = new Int16Array(MAX_POLYS);
+        //最多32767个多边形，每个最多POLY_MAX_VERTS_PER_POLY条边，每个边几个邻居？100?
+        /**
+         * @type {Array<Array<Int16Array>>}
+         * 多边形邻接信息：
+         *  - neighbors[polyIdx][edgeIdx][0] 表示该边有几个邻居
+         *  - neighbors[polyIdx][edgeIdx][1...N] 存储邻居多边形的索引
+         * 结构：
+         *   - 外层数组长度为最大多边形数
+         *   - 每个多边形有 POLY_MAX_VERTS_PER_POLY 条边
+         *   - 每条边可有多个邻居（最大100）
+         */
+        this.neighbors = new Array(MAX_POLYS); // [][][0] 0号位表示有几个邻居
         this.worldConverted = false;
     }
 
@@ -54,7 +63,9 @@ export class PolyMeshBuilder {
     return() {
         return {
             verts: this.verts,
+            vertslength:this.vertslength,
             polys: this.polys,
+            polyslength:this.polyslength,
             regions: this.regions,
             neighbors: this.neighbors
         };
@@ -601,27 +612,33 @@ export class PolyMeshBuilder {
      * @param {{x:number,y:number,z:number,regionId:number}[]} poly
      */
     addPolygon(poly) {
-        const idx = [];
+        const pi=this.polyslength*2;
+        this.polys[pi]=this.vertslength;
         for (const v of poly) {
-            const key = `${v.x}|${v.y}|${v.z}`;
-            let vi = this.vertIndexMap.get(key);
-            if (vi === undefined) {
-                vi = this.verts.length;
-                this.verts.push({ x: v.x, y: v.y, z: v.z });
-                this.vertIndexMap.set(key, vi);
-            }
-            idx.push(vi);
+            const vi = this.vertslength*3;
+            this.verts[vi]=v.x;
+            this.verts[vi+1]=v.y;
+            this.verts[vi+2]=v.z;
+            this.vertslength++;
         }
-
-        this.polys.push(idx);
-        this.regions.push(poly[0].regionId);
-        this.neighbors.push(new Array(idx.length).fill(0).map(() => []));
+        this.polys[pi+1]=this.vertslength-1;
+        this.regions[this.polyslength]=poly[0].regionId;
+        this.polyslength++;
     }
 
     convertVertsToWorldAfterAdjacency() {
         if (this.worldConverted) return;
-        for (let i = 0; i < this.verts.length; i++) {
-            this.verts[i] = this.toWorldVertex(this.verts[i]);
+        // 只转换实际已用顶点，且每次步进3
+        for (let i = 0; i < this.vertslength; i++) {
+            const vi = i * 3;
+            const v = this.toWorldVertex({
+                x: this.verts[vi],
+                y: this.verts[vi + 1],
+                z: this.verts[vi + 2]
+            });
+            this.verts[vi] = v.x;
+            this.verts[vi + 1] = v.y;
+            this.verts[vi + 2] = v.z;
         }
         this.worldConverted = true;
     }
@@ -640,45 +657,86 @@ export class PolyMeshBuilder {
     buildAdjacency() {
         /**@type {Map<string, {poly: number, edge: number}>} */
         const edgeMap = new Map();
-
-        for (let pi = 0; pi < this.polys.length; pi++) {
-            const poly = this.polys[pi];
-            for (let ei = 0; ei < poly.length; ei++) {
-                const a = poly[ei];
-                const b = poly[(ei + 1) % poly.length];
-                const k = a < b ? `${a},${b}` : `${b},${a}`;
-
-                if (!edgeMap.has(k)) {
-                    edgeMap.set(k, { poly: pi, edge: ei });
+        // 先重置所有邻居信息
+        for (let pi = 0; pi < this.polyslength; pi++) {
+            const startVert = this.polys[pi * 2];
+            const endVert = this.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            this.neighbors[pi]=new Array(vertCount);
+            for (let ei = 0; ei < vertCount; ei++) {
+                if (!this.neighbors[pi][ei]) {
+                    this.neighbors[pi][ei] = new Int16Array(100);
+                }
+                this.neighbors[pi][ei][0] = 0; // 0号位表示邻居数量
+            }
+        }
+        for (let pi = 0; pi < this.polyslength; pi++) {
+            const startVert = this.polys[pi * 2];
+            const endVert = this.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            for (let ei = 0; ei < vertCount; ei++) {
+                const a = startVert + ei;
+                const b = startVert + ((ei + 1) % vertCount);
+                const ka = `${this.verts[a * 3]},${this.verts[a * 3 + 1]},${this.verts[a * 3 + 2]}`;
+                const kb = `${this.verts[b * 3]},${this.verts[b * 3 + 1]},${this.verts[b * 3 + 2]}`;
+                const lk = ka + '|' + kb;
+                const rk = kb + '|' + ka;
+                if (!edgeMap.has(lk)) {
+                    edgeMap.set(lk, { poly: pi, edge: ei });
+                    edgeMap.set(rk, { poly: pi, edge: ei });
                 } else {
-                    const other = edgeMap.get(k);
-                    if(!other)continue;
-                    this.neighbors[pi][ei].push(other.poly);
-                    this.neighbors[other.poly][other.edge].push(pi);
+                    const other = edgeMap.get(lk);
+                    if (!other) continue;
+                    // 双向写入邻居
+                    let n1 = ++this.neighbors[pi][ei][0];
+                    this.neighbors[pi][ei][n1] = other.poly;
+                    let n2 = ++this.neighbors[other.poly][other.edge][0];
+                    this.neighbors[other.poly][other.edge][n2] = pi;
                 }
             }
         }
     }
 
     debugDrawPolys(duration = 5) {
-        for (let pi = 0; pi < this.polys.length; pi++) {
-            const poly = this.polys[pi];
+        // 修正：this.polys为Int32Array，存储为[起始顶点索引, 结束顶点索引]，每个多边形2个元素
+        for (let pi = 0; pi < this.polyslength; pi++) {
+            const startVert = this.polys[pi * 2];
+            const endVert = this.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            if (vertCount < 3) continue;
             const color = { r: 255, g: 255, b: 0 };
-            for (let i = 0; i < poly.length; i++) {
-                const start = vec.Zfly(this.verts[poly[i]], 0);
-                const end = vec.Zfly(this.verts[poly[(i + 1) % poly.length]], 0);
+            for (let i = 0; i < vertCount; i++) {
+                const vi0 = startVert + i;
+                const vi1 = startVert + ((i + 1) % vertCount);
+                const v0 = {
+                    x: this.verts[vi0 * 3],
+                    y: this.verts[vi0 * 3 + 1],
+                    z: this.verts[vi0 * 3 + 2],
+                };
+                const v1 = {
+                    x: this.verts[vi1 * 3],
+                    y: this.verts[vi1 * 3 + 1],
+                    z: this.verts[vi1 * 3 + 2],
+                };
+                const start = vec.Zfly(v0, 0);
+                const end = vec.Zfly(v1, 0);
                 Instance.DebugLine({ start, end, color, duration });
             }
         }
     }
 
     debugDrawAdjacency(duration = 15) {
-        for (let i = 0; i < this.polys.length; i++) {
-            const start = this.polyCenter(i);
-            for (let e = 0; e < this.neighbors[i].length; e++) {
-                for(let ni = 0; ni < this.neighbors[i][e].length; ni++){
-                    const neighborIndex = this.neighbors[i][e][ni];
-                    if(neighborIndex < 0 || neighborIndex < i) continue;
+        // 修正：边数应由多边形顶点数决定，不能直接用neighborsOfPoly.length
+        for (let pi = 0; pi < this.polyslength; pi++) {
+            const start = this.polyCenter(pi);
+            const startVert = this.polys[pi * 2];
+            const endVert = this.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            for (let ei = 0; ei < vertCount; ei++) {
+                for(let ni=1;ni<=this.neighbors[pi][ei][0];ni++){
+                    const neighborIndex = this.neighbors[pi][ei][ni];
+                    // 只画一次，避免重复
+                    if (neighborIndex < 0 || neighborIndex <= pi) continue;
                     const end = this.polyCenter(neighborIndex);
                     Instance.DebugLine({ start, end, color: { r: 255, g: 0, b: 255 }, duration });
                 }
@@ -688,33 +746,53 @@ export class PolyMeshBuilder {
 
     /**
      * @param {number} pi
+     * @returns {{x:number, y:number, z:number}}
      */
     polyCenter(pi) {
-        const poly = this.polys[pi];
-        let x = 0;
-        let y = 0;
-        let z = 0;
-
-        for (const vi of poly) {
-            const v = this.verts[vi];
-            x += v.x;
-            y += v.y;
-            z += v.z;
+        // 修正：根据多边形索引区间遍历顶点，累加坐标
+        const startVert = this.polys[pi * 2];
+        const endVert = this.polys[pi * 2 + 1];
+        const vertCount = endVert - startVert + 1;
+        if (vertCount <= 0) return { x: 0, y: 0, z: 0 };
+        let x = 0, y = 0, z = 0;
+        for (let vi = startVert; vi <= endVert; vi++) {
+            x += this.verts[vi * 3];
+            y += this.verts[vi * 3 + 1];
+            z += this.verts[vi * 3 + 2];
         }
-
-        const n = poly.length;
-        return { x: x / n, y: y / n, z: z / n };
+        return { x: x / vertCount, y: y / vertCount, z: z / vertCount };
     }
 
     debugDrawSharedEdges(duration = 15) {
-        for (let i = 0; i < this.polys.length; i++) {
-            const polyA = this.polys[i];
-            for (let ei = 0; ei < polyA.length; ei++) {
-                const ni = this.neighbors[i][ei];
-                if(ni.length<=0) continue;
-                const start = vec.Zfly(this.verts[polyA[ei]], 20);
-                const end = vec.Zfly(this.verts[polyA[(ei + 1) % polyA.length]], 20);
-                Instance.DebugLine({ start, end, color: { r: 0, g: 255, b: 0 }, duration });
+        // 修正：遍历所有多边形和每条边，判断该边是否有邻居，有则高亮
+        for (let pi = 0; pi < this.polyslength; pi++) {
+            const startVert = this.polys[pi * 2];
+            const endVert = this.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            if (vertCount < 3) continue;
+            const neighborsOfPoly = this.neighbors[pi];
+            if (!neighborsOfPoly) continue;
+            for (let ei = 0; ei < vertCount; ei++) {
+                const edgeNeighbors = neighborsOfPoly[ei];
+                if (!edgeNeighbors) continue;
+                const count = edgeNeighbors[0];
+                if (count > 0) {
+                    const vi0 = startVert + ei;
+                    const vi1 = startVert + ((ei + 1) % vertCount);
+                    const v0 = {
+                        x: this.verts[vi0 * 3],
+                        y: this.verts[vi0 * 3 + 1],
+                        z: this.verts[vi0 * 3 + 2],
+                    };
+                    const v1 = {
+                        x: this.verts[vi1 * 3],
+                        y: this.verts[vi1 * 3 + 1],
+                        z: this.verts[vi1 * 3 + 2],
+                    };
+                    const start = vec.Zfly(v0, 20);
+                    const end = vec.Zfly(v1, 20);
+                    Instance.DebugLine({ start, end, color: { r: 0, g: 255, b: 0 }, duration });
+                }
             }
         }
     }

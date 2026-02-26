@@ -50,30 +50,33 @@ function init()
     Instance.Msg(`导航初始化完成,耗时${end.getTime()-start.getTime()}ms`);
     path_ini=true;
 }
-//let start={x:3457,y:-984,z:-352};
-//let end={x:-2960,y:-625,z:-416};
-let pd=true;
+let start={x:3457,y:-984,z:-352};
+let end={x:-2960,y:-625,z:-416};
+let pd=false;
 //let sss=false;
+let ttt=0;
 Instance.SetThink(() => {
     if(pd==true)
     {
         //pathfinder.randomTest(10);
-        var players=Instance.FindEntitiesByClass("player");
-        players.forEach((e)=>{
-            if(e&&e instanceof CSPlayerPawn)
-            {
-                var p=e.GetPlayerController()?.GetPlayerPawn();
-                if(p)
-                {
-                    const pos=p.GetAbsOrigin();
-                    pathfinder.tick(pos);
-                    //end={x:pos.x,y:pos.y,z:pos.z};
-                    return;
-                }
-            }
-        })
-        pathfinder.debug(1);
-        //for(let i=0;i<1;i++)pathfinder.findPath(start,end);
+        //var players=Instance.FindEntitiesByClass("player");
+        //players.forEach((e)=>{
+        //    if(e&&e instanceof CSPlayerPawn)
+        //    {
+        //        var p=e.GetPlayerController()?.GetPlayerPawn();
+        //        if(p)
+        //        {
+        //            const pos=p.GetAbsOrigin();
+        //            pathfinder.tick(pos);
+        //            //end={x:pos.x,y:pos.y,z:pos.z};
+        //            return;
+        //        }
+        //    }
+        //})
+        //pathfinder.tick();
+        //ttt++;
+        //if(ttt%64==0)pathfinder.debug(1);
+        for(let i=0;i<1;i++)pathfinder.findPath(start,end);
     }
     Instance.SetNextThink(Instance.GetGameTime()+1/1);
 });
@@ -90,6 +93,7 @@ Instance.OnBulletImpact((event)=>{
     //pathfinder.findPath(start,end);
     //pathfinder.findPath(start,end);
 });
+//init();
 Instance.OnPlayerChat((event) => {
     const text = (event.text || "").trim().toLowerCase().split(' ')[0];
     if (text === "debug" || text === "!debug")
@@ -98,7 +102,10 @@ Instance.OnPlayerChat((event) => {
         //10v10 1000次tracebox
         init();
         //多边形总数: 651  跳点总数: 116_>91???
+        //多边形总数: 651  跳点总数: 91
+        //多边形总数: 635  跳点总数: 78
         Instance.Msg("开始调试");
+        for(let i=0;i<1;i++)pathfinder.findPath(start,end);
         //pathfinder.debug(60);
         //pathfinder.debugTools.debug(60);
         //pathfinder.debugTools.testinit();

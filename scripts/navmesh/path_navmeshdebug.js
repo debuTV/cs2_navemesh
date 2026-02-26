@@ -1,17 +1,17 @@
-import { Instance } from "cs_script/point_script";
+﻿import { Instance } from "cs_script/point_script";
 import { MESH_CELL_SIZE_XY, MESH_WORLD_SIZE_XY, PathState, TILE_SIZE,origin} from "./path_const";
 
 /**
- * NavMesh 调试工具集合。
+ * NavMesh 调试工具集
  *
- * 分层说明：
- * - MESH：体素/高度场层
- * - REGION：区域分割层
- * - CONTOUR：轮廓层
- * - POLY：主多边形层
- * - DETAIL：细节三角网层
- * - LINK：跳点连接层
- * - PATH：寻路结果层（poly path / funnel path / final path）
+ * 说明：
+ * - MESH：体素化 / 网格化 步骤
+ * - REGION：区域分割步骤
+ * - CONTOUR：轮廓构建步骤
+ * - POLY：多边形生成步骤
+ * - DETAIL：细节层（detail）三角网
+ * - LINK：连接（links）构建
+ * - PATH：路径生成与输出（poly path / funnel path / final path）
  */
 export class NavMeshDebugTools {
     /**
@@ -28,35 +28,50 @@ export class NavMeshDebugTools {
         this._totalPolyArea = 0;
     }
     /**
-        * 绘制最终细节网格（三角形）。
-        * 对应调试部分：DETAIL。
-        * 优先使用最终 meshdetail（支持 tile merge 后），无数据时回退到 polidetail 临时数据。
-        *
-     * 基于最终 this.nav.meshdetail 画细节三角形（兼容 tile merge 后结果）
+     * 绘制 detail 层三角形（用于调试 detail 网格）。
+     * 期望 detail 使用 TypedArray 布局：`verts` 为 Float32Array，`tris` 为 Uint16Array，
+     * 并存在 `trislength` / `vertslength` 等计数字段。
      * @param {number} [duration]
      */
     debugDrawMeshDetail(duration = 10) {
         const detail = this.nav.meshdetail;
-        if (detail?.verts && detail?.tris && detail.tris.length > 0) {
-            for (let i = 0; i < detail.tris.length; i++) {
-                const tri = detail.tris[i];
-                if (!tri || tri.length < 3) continue;
-                const a = detail.verts[tri[0]];
-                const b = detail.verts[tri[1]];
-                const c = detail.verts[tri[2]];
-                if (!a || !b || !c) continue;
-                const color = { r: 0, g: 180, b: 255 };
-                Instance.DebugLine({ start: a, end: b, color, duration });
-                Instance.DebugLine({ start: b, end: c, color, duration });
-                Instance.DebugLine({ start: c, end: a, color, duration });
-            }
-            return;
+        if (!detail) return;
+        // TypedArray 结构：detail.verts 为 Float32Array，detail.tris 为 Uint16Array，并存在 trislength/vertslength
+        for (let i = 0; i < detail.trislength; i++) {
+            const ia = detail.tris[i * 3];
+            const ib = detail.tris[i * 3 + 1];
+            const ic = detail.tris[i * 3 + 2];
+            const va = {
+                x: detail.verts[ia * 3],
+                y: detail.verts[ia * 3 + 1],
+                z: detail.verts[ia * 3 + 2]
+            };
+            const vb = {
+                x: detail.verts[ib * 3],
+                y: detail.verts[ib * 3 + 1],
+                z: detail.verts[ib * 3 + 2]
+            };
+            const vc = {
+                x: detail.verts[ic * 3],
+                y: detail.verts[ic * 3 + 1],
+                z: detail.verts[ic * 3 + 2]
+            };
+            const color = { r: 0, g: 180, b: 255 };
+            Instance.DebugLine({ start: va, end: vb, color, duration });
+            Instance.DebugLine({ start: vb, end: vc, color, duration });
+            Instance.DebugLine({ start: vc, end: va, color, duration });
         }
+        return;
     }
     debugLinks(duration = 30) {
-        for (const link of this.nav.links) {
-            const isJump = link.type === PathState.JUMP;
-            const isLadder = link.type === PathState.LADDER;
+        const links = this.nav.links;
+        const mesh = this.nav.mesh;
+        if (!links || !mesh || !mesh.polys || !mesh.verts) return;
+
+        for (let li = 0; li < links.length; li++) {
+            const type = links.type[li];
+            const isJump = type === PathState.JUMP;
+            const isLadder = type === PathState.LADDER;
             const lineColor = isLadder
                 ? { r: 255, g: 165, b: 0 }
                 : (isJump ? { r: 0, g: 255, b: 255 } : { r: 0, g: 0, b: 255 });
@@ -64,60 +79,79 @@ export class NavMeshDebugTools {
                 ? { r: 255, g: 215, b: 0 }
                 : (isJump ? { r: 0, g: 255, b: 255 } : { r: 0, g: 255, b: 0 });
 
-            Instance.DebugLine({
-                start: link.PosA,
-                end: link.PosB,
-                color: lineColor,
-                duration
-            });
-            Instance.DebugSphere({ center: link.PosA, radius: 4, color: startColor, duration });
-            const poly = this.nav.mesh.polys[link.PolyB];
-            for (let i = 0; i < poly.length; i++) {
-                const start = this.nav.mesh.verts[poly[i]];
-                const end = this.nav.mesh.verts[poly[(i + 1) % poly.length]];
-                Instance.DebugLine({ start, end, color: isLadder ? { r: 255, g: 140, b: 0 } : { r: 255, g: 0, b: 255 }, duration });
+            const posBase = li * 6;
+            const start = {
+                x: links.pos[posBase],
+                y: links.pos[posBase + 1],
+                z: links.pos[posBase + 2]
+            };
+            const end = {
+                x: links.pos[posBase + 3],
+                y: links.pos[posBase + 4],
+                z: links.pos[posBase + 5]
+            };
+
+            Instance.DebugLine({ start, end, color: lineColor, duration });
+            Instance.DebugSphere({ center: start, radius: 4, color: startColor, duration });
+
+            const pi = links.poly[(li << 1) + 1];
+            if (pi < 0 || pi >= mesh.polyslength) continue;
+
+            const startVert = mesh.polys[pi * 2];
+            const endVert = mesh.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            for (let i = 0; i < vertCount; i++) {
+                const vi0 = startVert + i;
+                const vi1 = startVert + ((i + 1) % vertCount);
+                const v0 = { x: mesh.verts[vi0 * 3], y: mesh.verts[vi0 * 3 + 1], z: mesh.verts[vi0 * 3 + 2] };
+                const v1 = { x: mesh.verts[vi1 * 3], y: mesh.verts[vi1 * 3 + 1], z: mesh.verts[vi1 * 3 + 2] };
+                Instance.DebugLine({ start: v0, end: v1, color: isLadder ? { r: 255, g: 140, b: 0 } : { r: 255, g: 0, b: 255 }, duration });
             }
         }
     }
     /**
-     * 绘制最终主多边形网格边线（不含 links）。
+     * 绘制所有多边形（不展示 links），用于检查多边形边界。
      * @param {number} duration
      */
     debugDrawMeshPolys(duration = 10) {
         if (!this.nav.mesh) return;
-        for (let pi = 0; pi < this.nav.mesh.polys.length; pi++) {
-            const poly = this.nav.mesh.polys[pi];
+        const mesh = this.nav.mesh;
+        for (let pi = 0; pi < mesh.polyslength; pi++) {
+            const startVert = mesh.polys[pi * 2];
+            const endVert = mesh.polys[pi * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            if (vertCount < 3) continue;
             const color = { r: 255, g: 0, b: 0 };
-            for (let i = 0; i < poly.length; i++) {
-                const start = this.nav.mesh.verts[poly[i]];
-                const end = this.nav.mesh.verts[poly[(i + 1) % poly.length]];
-                Instance.DebugLine({ start, end, color, duration });
+            for (let i = 0; i < vertCount; i++) {
+                const vi0 = startVert + i;
+                const vi1 = startVert + ((i + 1) % vertCount);
+                const v0 = { x: mesh.verts[vi0 * 3], y: mesh.verts[vi0 * 3 + 1], z: mesh.verts[vi0 * 3 + 2] };
+                const v1 = { x: mesh.verts[vi1 * 3], y: mesh.verts[vi1 * 3 + 1], z: mesh.verts[vi1 * 3 + 2] };
+                Instance.DebugLine({ start: v0, end: v1, color, duration });
             }
         }
     }
 
     /**
-        * 绘制最终多边形邻接关系（中心点连线）。
-        * 对应调试部分：POLY 邻接/跨 tile 连接检查。
-        *
-     * 直接基于最终 this.nav.mesh.neighbors 画多边形连接关系
+     * 绘制网格连通关系（多边形邻接），用于调试跨 tile 的边界匹配。
+     * 直接读取 `this.nav.mesh.neighbors` 结构并绘制连接线。
      * @param {number} [duration]
      */
     debugDrawMeshConnectivity(duration = 15) {
         if (!this.nav.mesh) return;
         const mesh = this.nav.mesh;
         const drawn = new Set();
-        for (let i = 0; i < mesh.polys.length; i++) {
+        for (let i = 0; i < mesh.polyslength; i++) {
             const start = this._meshPolyCenter(i);
-            const neighbors = mesh.neighbors?.[i] || [];
-            for (let e = 0; e < neighbors.length; e++) {
-                const edgeNei = neighbors[e];
-                const neiList = Array.isArray(edgeNei)
-                    ? edgeNei
-                    : (typeof edgeNei === "number" && edgeNei >= 0 ? [edgeNei] : []);
-
-                for (const ni of neiList) {
-                    if (ni < 0) continue;
+            const pstart=this.nav.mesh.polys[i*2];
+            const pend=this.nav.mesh.polys[i*2+1];
+            const ecount=pend-pstart+1;
+            for (let e = 0; e < ecount; e++) {
+                const edgeNei = mesh.neighbors[i][e][0];
+                if(edgeNei==0)continue;
+                for(let j=1;j<=edgeNei;j++)
+                {
+                    const ni=mesh.neighbors[i][e][j];
                     const a = Math.min(i, ni);
                     const b = Math.max(i, ni);
                     const k = `${a}|${b}`;
@@ -137,30 +171,27 @@ export class NavMeshDebugTools {
     }
 
     /**
-        * 计算指定多边形中心点。
-        * 对应调试部分：内部工具（给邻接线、路径可视化复用）。
-        *
+     * 计算指定多边形的几何中心（用于调试绘制）。
+     * 适配 TypedArray 布局，返回 {x,y,z}。
      * @param {number} polyIndex
      */
     _meshPolyCenter(polyIndex) {
-        const poly = this.nav.mesh.polys[polyIndex];
-        let x = 0;
-        let y = 0;
-        let z = 0;
-        for (const vi of poly) {
-            const v = this.nav.mesh.verts[vi];
-            x += v.x;
-            y += v.y;
-            z += v.z;
+        const mesh = this.nav.mesh;
+        const startVert = mesh.polys[polyIndex * 2];
+        const endVert = mesh.polys[polyIndex * 2 + 1];
+        const vertCount = endVert - startVert + 1;
+        if (vertCount <= 0) return { x: 0, y: 0, z: 0 };
+        let x = 0, y = 0, z = 0;
+        for (let vi = startVert; vi <= endVert; vi++) {
+            x += mesh.verts[vi * 3];
+            y += mesh.verts[vi * 3 + 1];
+            z += mesh.verts[vi * 3 + 2];
         }
-        const n = poly.length || 1;
-        return { x: x / n, y: y / n, z: z / n };
+        return { x: x / vertCount, y: y / vertCount, z: z / vertCount };
     }
 
     /**
-        * 绘制 Funnel 拉直后的路径点序列。
-        * 对应调试部分：PATH（funnel 阶段）。
-        *
+     * 绘制 Funnel 生成的路径（用于调试 funnel 算法）。
      * @param {{pos:{x:number,y:number,z:number},mode:number}[]} path
      * @param {number} [duration]
      */
@@ -188,9 +219,7 @@ export class NavMeshDebugTools {
     }
 
     /**
-        * 绘制最终输出路径（含跳跃段颜色区分）。
-        * 对应调试部分：PATH（最终路径）。
-        *
+     * 绘制路径（包含不同模式的颜色区分，例如行走/跳跃/梯子）。
      * @param {{pos:{x:number,y:number,z:number},mode:number}[]} path
      * @param {number} [duration]
      */
@@ -227,16 +256,14 @@ export class NavMeshDebugTools {
     }
 
     /**
-        * 绘制 A* 返回的多边形路径（按 poly 中心点串线）。
-        * 对应调试部分：PATH（poly path 阶段）。
-        *
      * @param {{id:number,mode:number}[]} polyPath
      * @param {number} [duration]
      */
     debugDrawPolyPath(polyPath, duration = 10) {
         if (!polyPath || polyPath.length === 0 || !this.nav.mesh) return;
-
+        const mesh = this.nav.mesh;
         let prev = null;
+        // 避免重复绘制相同路径段或中心点
         const color = {
             r: Math.floor(100 + Math.random() * 155),
             g: Math.floor(100 + Math.random() * 155),
@@ -248,17 +275,21 @@ export class NavMeshDebugTools {
             b: Math.floor(100 + Math.random() * 155),
         };
         for (const pi of polyPath) {
-            Instance.Msg(pi.id);
-            const poly = this.nav.mesh.polys[pi.id];
+            // 适配 TypedArray 布局：mesh.polys 存为 start/end 对，mesh.verts 为扁平 Float32Array
+            const polyIndex = pi.id;
+            const startVert = mesh.polys[polyIndex * 2];
+            const endVert = mesh.polys[polyIndex * 2 + 1];
+            const vertCount = endVert - startVert + 1;
+            if (vertCount < 3) continue;
             let cx = 0, cy = 0, cz = 0;
-            for (const vi of poly) {
-                const v = this.nav.mesh.verts[vi];
-                cx += v.x; cy += v.y; cz += v.z;
+            for (let vi = startVert; vi <= endVert; vi++) {
+                cx += mesh.verts[vi * 3];
+                cy += mesh.verts[vi * 3 + 1];
+                cz += mesh.verts[vi * 3 + 2];
             }
-            cx /= poly.length;
-            cy /= poly.length;
-            cz /= poly.length;
-
+            cx /= vertCount;
+            cy /= vertCount;
+            cz /= vertCount;
             const center = { x: cx, y: cy, z: cz };
             if (pi.mode == 2) {
                 Instance.DebugSphere({ center, radius: 10, color: colorJ, duration });

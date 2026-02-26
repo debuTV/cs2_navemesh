@@ -1,5 +1,5 @@
 ﻿import { Instance } from "cs_script/point_script";
-import { POLY_DETAIL_SAMPLE_DIST, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, origin, pointInTri, POLY_DETAIL_HEIGHT_ERROR, isConvex, distPtSegSq } from "./path_const";
+import { POLY_DETAIL_SAMPLE_DIST, MESH_CELL_SIZE_XY, MESH_CELL_SIZE_Z, origin, pointInTri, POLY_DETAIL_HEIGHT_ERROR, isConvex, distPtSegSq, MAX_POLYS, MAX_TRIS } from "./path_const";
 import { OpenHeightfield } from "./path_openheightfield";
 import { OpenSpan } from "./path_openspan";
 import { Tool } from "./util/tool";
@@ -18,44 +18,90 @@ export class PolyMeshDetailBuilder {
         this.mesh = mesh;
         /**@type {OpenHeightfield} */
         this.hf = hf;
-        /**@type {Vector[]}*/
-        this.verts = [];
-        /**@type {number[][]}*/
-        this.tris = [];
-        /**@type {number[][]}*/
-        this.meshes = [];
-        /**@type {number[]} */
-        this.triTopoly=[];
+        /** @type {Float32Array} */
+        this.verts = new Float32Array(MAX_TRIS*3 * 3);//全局顶点数组，顺序为[x0,y0,z0,x1,y1,z1,...]，每个多边形的顶点在其中占用一个连续区间
+        /** @type {number} */
+        this.vertslength = 0;//点总数
+        /** @type {Uint16Array} */
+        this.tris = new Uint16Array(MAX_TRIS * 3);//第i个三角形的三个顶点为tris[3i][3i+1][3i+2],每个坐标为verts[tris[3i]|+1|+2]
+        /** @type {number} */
+        this.trislength = 0;//三角形总数
+        /** @type {Uint16Array} */
+        this.triTopoly = new Uint16Array(MAX_TRIS);//[i]:第i个三角形对应的多边形索引
+        //每个多边形对应的三角形索引范围，格式为[baseVert=该多边形点索引起点, vertCount=该多边形有几个点, baseTri=该多边形三角索引起点, triCount=该多边形有几个三角形]
+        /** @type {Uint16Array} */
+        this.baseVert = new Uint16Array(MAX_POLYS);//该多边形点索引起点
+        /** @type {Uint16Array} */
+        this.vertsCount = new Uint16Array(MAX_POLYS);//该多边形有几个点
+        /** @type {Uint16Array} */
+        this.baseTri = new Uint16Array(MAX_POLYS);//该多边形三角索引起点
+        /** @type {Uint16Array} */
+        this.triCount = new Uint16Array(MAX_POLYS);//该多边形有几个三角形
+
+        ///**@type {Vector[]}*/
+        //this.verts = [];
+        ///**@type {number[][]}*/
+        //this.tris = [];
+        ///**@type {number[][]}*/
+        //this.meshes = [];
+        ///**@type {number[]} */
+        //this.triTopoly=[];
     }
 
     init() {
         this.error = false;
-        for (let pi = 0; pi < this.mesh.polys.length; pi++) {
+        for (let pi = 0; pi < this.mesh.polyslength; pi++) {
             this.buildPoly(pi);
         }
 
         return {
             verts: this.verts,
+            vertslength:this.vertslength,
             tris: this.tris,
-            meshes: this.meshes,
-            triTopoly:this.triTopoly
+            trislength:this.trislength,
+            triTopoly:this.triTopoly,
+            baseVert:this.baseVert,
+            vertsCount:this.vertsCount,
+            baseTri:this.baseTri,
+            triCount:this.triCount
         };
     }
     debugDrawPolys(duration = 5) {
-        for (let pi = 0; pi < this.tris.length; pi++) {
-            const tri = this.tris[pi];
+        // TypedArray结构：tris为Uint16Array，verts为Float32Array
+        for (let ti = 0; ti < this.trislength; ti++) {
+            const ia = this.tris[ti * 3];
+            const ib = this.tris[ti * 3 + 1];
+            const ic = this.tris[ti * 3 + 2];
             const color = { r: 255 * Math.random(), g: 255 * Math.random(), b: 255 * Math.random() };
-            Instance.DebugLine({ start:this.verts[tri[0]], end:this.verts[tri[1]], color, duration });
-            Instance.DebugLine({ start:this.verts[tri[1]], end:this.verts[tri[2]], color, duration });
-            Instance.DebugLine({ start:this.verts[tri[2]], end:this.verts[tri[0]], color, duration });
+            const va = {
+                x: this.verts[ia * 3],
+                y: this.verts[ia * 3 + 1],
+                z: this.verts[ia * 3 + 2]
+            };
+            const vb = {
+                x: this.verts[ib * 3],
+                y: this.verts[ib * 3 + 1],
+                z: this.verts[ib * 3 + 2]
+            };
+            const vc = {
+                x: this.verts[ic * 3],
+                y: this.verts[ic * 3 + 1],
+                z: this.verts[ic * 3 + 2]
+            };
+            Instance.DebugLine({ start: va, end: vb, color, duration });
+            Instance.DebugLine({ start: vb, end: vc, color, duration });
+            Instance.DebugLine({ start: vc, end: va, color, duration });
         }
     }
     /**
      * @param {number} pi
      */
     buildPoly(pi) {
-        const poly = this.mesh.polys[pi];
-        const regionid=this.mesh.regions[pi];
+        // TypedArray结构：polys为索引区间数组，regions为Int16Array
+        const startVert = this.mesh.polys[pi * 2];
+        const endVert = this.mesh.polys[pi * 2 + 1];
+        const poly = [startVert, endVert];
+        const regionid = this.mesh.regions[pi];
         const polyVerts = this.getPolyVerts(this.mesh, poly);
         // 待优化：内部采样点高度可改为基于细分后三角形插值
 
@@ -111,31 +157,43 @@ export class PolyMeshDetailBuilder {
                 rawSamples.splice(toRemoveIndices[i], 1);
             }
         }
+        
         // 7. 添加到全局列表
-        const baseVert = this.verts.length;
-        const baseTri = this.tris.length;
-        const allVerts=trianglesCDT.vertices;
-        for (const v of allVerts) {
-            this.verts.push(v);
+        // TypedArray结构填充
+        const baseVert = this.vertslength;
+        const baseTri = this.trislength;
+        const allVerts = trianglesCDT.vertices;
+        // 填充verts
+        for (let i = 0; i < allVerts.length; i++) {
+            const v = allVerts[i];
+            this.verts[baseVert * 3 + i * 3] = v.x;
+            this.verts[baseVert * 3 + i * 3 + 1] = v.y;
+            this.verts[baseVert * 3 + i * 3 + 2] = v.z;
         }
+        this.vertslength += allVerts.length;
         triangles = trianglesCDT.getTri();
         if (trianglesCDT.error) this.error = true;
-
-        for (const tri of triangles) {
-            this.tris.push([
-                baseVert + tri.a,
-                baseVert + tri.b,
-                baseVert + tri.c
-            ]);
-            this.triTopoly.push(pi);
+        // 填充tris和triTopoly
+        for (let i = 0; i < triangles.length; i++) {
+            const tri = triangles[i];
+            this.tris[(baseTri + i) * 3] = baseVert + tri.a;
+            this.tris[(baseTri + i) * 3 + 1] = baseVert + tri.b;
+            this.tris[(baseTri + i) * 3 + 2] = baseVert + tri.c;
+            this.triTopoly[baseTri + i] = pi;
         }
-
-        this.meshes.push([
-            baseVert,
-            allVerts.length,
-            baseTri,
-            triangles.length
-        ]);
+        this.trislength += triangles.length;
+        // 填充baseVert、vertsCount、baseTri、triCount
+        this.baseVert[pi] = baseVert;
+        this.vertsCount[pi] = allVerts.length;
+        this.baseTri[pi] = baseTri;
+        this.triCount[pi] = triangles.length;
+        // meshes数组可选，若需要保留
+        // this.meshes.push([
+        //     baseVert,
+        //     allVerts.length,
+        //     baseTri,
+        //     triangles.length
+        // ]);
     }
     /**
     * 计算边界顶点高度信息
@@ -168,7 +226,16 @@ export class PolyMeshDetailBuilder {
      * @param {number[]} poly
      */
     getPolyVerts(mesh, poly) {
-        return poly.map(vi => mesh.verts[vi]);
+        // poly为[startVert, endVert]区间
+        const [start, end] = poly;
+        const verts = [];
+        for (let i = start; i <= end; i++) {
+            const x = mesh.verts[i * 3];
+            const y = mesh.verts[i * 3 + 1];
+            const z = mesh.verts[i * 3 + 2];
+            verts.push({ x, y, z });
+        }
+        return verts;
     }
     /**
     * 生成内部采样点（带高度误差检查）

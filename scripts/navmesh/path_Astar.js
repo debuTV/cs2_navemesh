@@ -1,5 +1,5 @@
 ﻿import { Instance } from "cs_script/point_script";
-import { ASTAR_HEURISTIC_SCALE, ASTAR_OPTIMIZATION_1, PathState } from "./path_const";
+import { ASTAR_HEURISTIC_SCALE, PathState } from "./path_const";
 import { FunnelHeightFixer } from "./path_funnelheightfixer";
 import { Tool } from "./util/tool";
 
@@ -10,42 +10,34 @@ import { Tool } from "./util/tool";
 export class PolyGraphAStar {
     /**
     * @param {NavMeshMesh} polys
-    * @param {Map<number,NavMeshLink[]>} links
+    * @param {Map<number,import("./path_manager").NavMeshLinkARRAY[]>} links
      * @param {FunnelHeightFixer} heightfixer
      */
     constructor(polys, links, heightfixer) {
         this.mesh = polys;
-        this.polyCount = polys.polys.length;
-        /**@type {Map<number,NavMeshLink[]>} */
+        this.polyCount = polys.polyslength;
+        /**@type {Map<number,import("./path_manager").NavMeshLinkARRAY[]>} */
         this.links = links;
         this.heightfixer = heightfixer;
         //预计算中心点
         this.centers = new Array(this.polyCount);
         for (let i = 0; i < this.polyCount; i++) {
-            const poly = this.mesh.polys[i];
+            const startVert = this.mesh.polys[i * 2];
+            const endVert = this.mesh.polys[i * 2 + 1];
             let x = 0, y = 0, z = 0;
-            for (const vi of poly) {
-                const v = this.mesh.verts[vi];
-                x += v.x; y += v.y; z += v.z;
+            for (let vi = startVert; vi <= endVert; vi++) {
+                const base = vi * 3;
+                x += this.mesh.verts[base];
+                y += this.mesh.verts[base + 1];
+                z += this.mesh.verts[base + 2];
             }
-            const n = poly.length;
+            const n = endVert - startVert + 1;
             this.centers[i] = {
-                x: x / n, y: y / n, z: z / n
+                x: x / n,
+                y: y / n,
+                z: z / n
             };
         }
-        //预计算距离
-        if (ASTAR_OPTIMIZATION_1) {
-            this.edgeWeights = new Array(this.polyCount);
-            for (let i = 0; i < this.polyCount; i++) {
-                this.edgeWeights[i] = new Float32Array(this.polyCount);
-            }
-            for (let i = 0; i < this.polyCount; i++) {
-                for (let j = i + 1; j < this.polyCount; j++) {
-                    this.edgeWeights[j][i] = this.edgeWeights[i][j] = this.distsqr(i, j);
-                }
-            }
-        }
-
         this.heuristicScale = ASTAR_HEURISTIC_SCALE;
         this.open = new MinHeap(this.polyCount);
     }
@@ -64,7 +56,7 @@ export class PolyGraphAStar {
         }
 
         if (startPoly.poly == endPoly.poly) {
-            return { start: startPoly.pos, end: endPoly.pos, path: [{ id: endPoly.poly, mode: 1 }] };
+            return { start: startPoly.pos, end: endPoly.pos, path: [{ id: endPoly.poly, mode: PathState.WALK }] };
         }
         return { start: startPoly.pos, end: endPoly.pos, path: this.findPolyPath(startPoly.poly, endPoly.poly) };
     }
@@ -102,33 +94,38 @@ export class PolyGraphAStar {
             }
 
             const neighbors = this.mesh.neighbors[current];
-            for (let i = 0; i < neighbors.length; i++) {
-                for (const n of neighbors[i]) {
-                    if (n < 0 || state[n] == 2) continue;
-                    // @ts-ignore
-                    const tentative = g[current] + this.distsqr(current, n);
-                    if (tentative < g[n]) {
-                        parent[n] = current;
-                        walkMode[n] = PathState.WALK;
-                        g[n] = tentative;
-                        // @ts-ignore
-                        const f = tentative + this.distsqr(n, end) * this.heuristicScale;
-                        if (state[n] != 1) {
-                            open.push(n, f);
-                            state[n] = 1;
+            if (neighbors)
+            {
+                for (let i = 0; i < neighbors.length; i++) {
+                    const entry = neighbors[i];
+                    if (!entry) continue;
+                    const count = entry[0];
+                    if (count <= 0) continue;
+                    for (let k = 1; k <= count; k++) {
+                        const n = entry[k];
+                        if (state[n] == 2) continue;
+                        const tentative = g[current] + this.distsqr(current, n);
+                        if (tentative < g[n]) {
+                            parent[n] = current;
+                            walkMode[n] = PathState.WALK;
+                            g[n] = tentative;
+                            const f = tentative + this.distsqr(n, end) * this.heuristicScale;
+                            if (state[n] != 1) {
+                                open.push(n, f);
+                                state[n] = 1;
+                            } else open.update(n, f);
                         }
-                        else open.update(n, f);
                     }
                 }
             }
-            if (!this.links.has(current)) continue;
-            // @ts-ignore
-            for (const link of this.links.get(current)) {
+            const linkSet = this.links.get(current);
+            if (!linkSet) continue;
+            for (const link of linkSet) {
                 let v = -1;
                 if (link.PolyA == current) v = link.PolyB;
                 else if (link.PolyB == current) v = link.PolyA;
                 if (v == -1 || state[v] == 2) continue;
-                const moveCost = link.cost * link.cost;
+                const moveCost = link.cost;
                 if (g[current] + moveCost < g[v]) {
                     g[v] = g[current] + moveCost;
                     // @ts-ignore
@@ -142,6 +139,26 @@ export class PolyGraphAStar {
                     else open.update(v, f);
                 }
             }
+            //for (let li = 0; li < linkSet.length; li++) {
+            //    let v = -1;
+            //    const a = linkSet.poly[li * 2];
+            //    const b = linkSet.poly[li * 2 + 1];
+            //    if (a === current) v = b;
+            //    else if (b === current) v = a;
+            //    if (state[v] == 2) continue;
+            //    const moveCost = linkSet.cost[li];
+            //    if (g[current] + moveCost < g[v]) {
+            //        g[v] = g[current] + moveCost;
+            //        const f = g[v] + this.distsqr(v, end) * this.heuristicScale;
+            //        parent[v] = current;
+            //        walkMode[v] = linkSet.type[li];
+            //        if (state[v] != 1) {
+            //            open.push(v, f);
+            //            state[v] = 1;
+            //        }
+            //        else open.update(v, f);
+            //    }
+            //}
         }
         return this.reconstruct(parent, walkMode, closestNode);
     }
@@ -164,8 +181,6 @@ export class PolyGraphAStar {
      * @param {number} b
      */
     distsqr(a, b) {
-        // @ts-ignore
-        if (ASTAR_OPTIMIZATION_1) return this.edgeWeights[a][b];
         const pa = this.centers[a];
         const pb = this.centers[b];
         const dx = pa.x - pb.x;
@@ -179,9 +194,9 @@ class MinHeap {
      * @param {number} polyCount
      */
     constructor(polyCount) {
-        this.nodes = new Int32Array(polyCount);
+        this.nodes = new Uint16Array(polyCount);
         this.costs = new Float32Array(polyCount);
-        this.index = new Int32Array(polyCount).fill(-1);
+        this.index = new Int16Array(polyCount).fill(-1);
         this.size = 0;
     }
     clear() {

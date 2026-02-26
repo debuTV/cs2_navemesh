@@ -1,10 +1,12 @@
 ﻿import { Instance } from "cs_script/point_script";
 /** @typedef {import("cs_script/point_script").Vector} Vector */
 /** @typedef {import("cs_script/point_script").Color} Color */
+//navmesh最多65535个顶点
 export const PathState = {
     WALK: 1,//下一个点直走
     JUMP: 2,//下一个点需要跳跃
-    LADDER: 3//下一个点是梯子点，可能是起点也可能是终点，到这个点开启梯子状态，直到下一个点不是梯子
+    LADDER: 3,//下一个点是梯子点，开启梯子状态，直到下一个点不是梯子
+    PORTAL: 4//下一个点是传送点，开启瞬移模式
 };
 //==============================对外脚本接口=========================================
 /**
@@ -33,6 +35,11 @@ export const MESH_CELL_SIZE_Z = 1;                                // 体素高�
 export const MESH_TRACE_SIZE_Z = 32;                              // 射线方块高度//太高，会把竖直方向上的间隙也忽略
 export const MESH_WORLD_SIZE_XY = 6600;                           // 世界大小
 export const MESH_WORLD_SIZE_Z = 980;                             // 世界高度
+//==============================数据结构设置=====================================
+export const MAX_POLYS = 65535;                                   // 多边形最大数量，受限于16位索引
+export const MAX_VERTS = 65535;                                   // 顶点最大数量
+export const MAX_TRIS = 65535;                                    // 三角形最大数量
+export const MAX_LINKS = 4096;                                    // 跳点最大数量
 //==============================Recast设置======================================
 //其他参数
 export const MAX_SLOPE = 65;                                      // 最大坡度（度数），超过这个角度的斜面将被视为不可行走
@@ -73,16 +80,17 @@ export const TILE_DEBUG = false;                                  // 显示瓦�
 export const POLY_DEBUG = false;                                  // 显示最后的寻路多边形
 export const POLY_DETAIL_DEBUG = false;                           // 显示最后的细节多边形
 export const LINK_DEBUG = false;                                  // 显示特殊连接点
-export const LOAD_DEBUG = false;                                   // 载入静态数据时可开启，查看是否导入成功
+export const LOAD_DEBUG = true;                                   // 载入静态数据时可开启，查看是否导入成功
 //==============================Detour设置======================================
 //A*寻路参数
-export const ASTAR_OPTIMIZATION_1 = false;                        // 是否预计算距离，推荐多边形在2000及以下可以打开
+export const OFF_MESH_LINK_COST_SCALE=1;                         // 特殊点的权重，越大越不倾向于特殊点
 export const ASTAR_BLOCK_SIZE = 128;                              // 多边形分块大小
 export const ASTAR_HEURISTIC_SCALE = 1.2;                         // A*推荐数值
 //Funnel参数
 export const FUNNEL_DISTANCE = 15;                                // 拉直的路径距离边缘多远(0-100，百分比，100%意味着只能走边的中点)
-//高度修正参数
-export const ADJUST_HEIGHT_DISTANCE = 50;                         // 路径中每隔这个距离增加一个点，用于修正高度
+//高度修正参数//一般不需要，除非移动是平移过去
+export const ADJUST_HEIGHT=false;                                  //是否启用高度修正
+export const ADJUST_HEIGHT_DISTANCE = 200;                         // 路径中每隔这个距离增加一个点，用于修正高度
 
 /**
  * 返回一个随机的颜色
@@ -291,13 +299,14 @@ export function closestPointOnSegment(p, a, b) {
 /**
  * 点是否在凸多边形内(xy投影)
  * @param {Vector} p
- * @param {Vector[]} verts
- * @param {number[]} poly
+ * @param {Float32Array} verts
+ * @param {number} start
+ * @param {number} end
  */
-export function pointInConvexPolyXY(p, verts, poly) {
-    for (let i = 0; i < poly.length; i++) {
-        const a = verts[poly[i]];
-        const b = verts[poly[(i + 1) % poly.length]];
+export function pointInConvexPolyXY(p, verts, start, end) {
+    for (let i = start; i <= end; i++) {
+        const a = { x: verts[i * 3], y: verts[i * 3 + 1],z:0 };
+        const b = { x: verts[((i < end) ? (i + 1) : start) * 3], y: verts[((i < end) ? (i + 1) : start) * 3 + 1],z:0 };
         if (area(a, b, p) < 0) return false;
     }
     return true;
@@ -305,42 +314,42 @@ export function pointInConvexPolyXY(p, verts, poly) {
 /**
  * 点到 polygon 最近点(xy投影)
  * @param {Vector} pos
- * @param {Vector[]} verts
- * @param {number[]} poly
+ * @param {Float32Array} verts
+ * @param {number} start
+ * @param {number} end
  */
-export function closestPointOnPoly(pos, verts, poly) {
+export function closestPointOnPoly(pos, verts, start, end) {
     // 1. 如果在多边形内部（XY），直接投影到平面
-    if (pointInConvexPolyXY(pos, verts, poly)) {
+    if (pointInConvexPolyXY(pos, verts, start, end)) {
         // 用平均高度（你也可以用平面方程）
         let maxz = -Infinity, minz = Infinity;
-        for (const vi of poly) {
-            maxz = Math.max(maxz, verts[vi].z);
-            minz = Math.min(minz, verts[vi].z);
+        start*=3;
+        end*=3;
+        for (let i = start; i <= end; i+=3) {
+            const z = verts[i + 2];
+            if (z > maxz) maxz = z;
+            if (z < minz) minz = z;
         }
-
-        return { x: pos.x, y: pos.y, z: (maxz + minz) / 2, in: true };
+        return { x: pos.x, y: pos.y, z: (maxz + minz) >>1, in: true };
     }
-
     // 2. 否则，找最近边
     let best = null;
     let bestDist = Infinity;
-
-    for (let i = 0; i < poly.length; i++) {
-        const a = verts[poly[i]];
-        const b = verts[poly[(i + 1) % poly.length]];
+    for (let i = start; i <= end; i++) {
+        const ia = i;
+        const ib = (i < end) ? (i + 1) : start;
+        const a = { x: verts[ia * 3], y: verts[ia * 3 + 1], z: verts[ia * 3 + 2] };
+        const b = { x: verts[ib * 3], y: verts[ib * 3 + 1], z: verts[ib * 3 + 2] };
         const c = closestPointOnSegment(pos, a, b);
-
         const dx = c.x - pos.x;
         const dy = c.y - pos.y;
         const dz = c.z - pos.z;
         const d = dx * dx + dy * dy + dz * dz;
-
         if (d < bestDist) {
             bestDist = d;
             best = { x: c.x, y: c.y, z: c.z, in: false };
         }
     }
-
     return best;
 }
 
